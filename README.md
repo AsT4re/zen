@@ -17,6 +17,8 @@ replace our custom solution, how we can scale it and how much it costs.
 https://en.wikipedia.org/wiki/Geo-fence
 https://dgraph.io/
 
+Requirements:
+* Protobuf compiler
 
 Install hints:
 
