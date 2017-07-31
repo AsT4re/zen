@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package proto;
+
+message UserFence {
+  int32 userId = 1;
+  string placeName = 2;
+  int32 fenceId = 3;
+}
