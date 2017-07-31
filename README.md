@@ -16,3 +16,17 @@ replace our custom solution, how we can scale it and how much it costs.
 
 https://en.wikipedia.org/wiki/Geo-fence
 https://dgraph.io/
+
+
+Install hints:
+
+Kafka:
+* docker pull spotify/kafka
+* docker run -p 2181:2181 -p 9092:9092 --env ADVERTISED_HOST=`docker-machine ip \`docker-machine active\`` --env ADVERTISED_PORT=9092 spotify/kafka
+
+DGraph:
+* docker pull dgraph/dgraph
+* docker run -it -p 127.0.0.1:8080:8080 -p 127.0.0.1:9080:9080 -v ~/dgraph:/dgraph --name dgraph dgraph/dgraph dgraph --bindall=true
+
+Driver Go for kafka:
+* go get github.com/Shopify/sarama
