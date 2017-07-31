@@ -30,5 +30,4 @@ DGraph:
 * docker pull dgraph/dgraph
 * docker run -it -p 127.0.0.1:8080:8080 -p 127.0.0.1:9080:9080 -v ~/dgraph:/dgraph --name dgraph dgraph/dgraph dgraph --bindall=true
 
-Driver Go for kafka:
-* go get github.com/Shopify/sarama
+make install
