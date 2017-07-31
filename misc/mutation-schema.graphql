@@ -1,0 +1,8 @@
+{
+  mutation {
+    schema {
+      loc: geo @index .
+      name: string .
+    }
+  }
+}
