@@ -6,7 +6,10 @@ import(
 	"os/signal"
 	"sync"
 	"log"
+	"zen/protobuf/proto"
 )
+
+//import proto1 "github.com/golang/protobuf/proto"
 
 func main() {
 	config := sarama.NewConfig()
@@ -42,6 +45,12 @@ func main() {
 			errors++
     }
 	}()
+
+	userPos := proto.UserLocation {
+		UserId: 1,
+		Lat: 30.12
+		Long: 35.123
+	}
 
 ProducerLoop:
 	for {
