@@ -119,7 +119,7 @@ func run() error {
 
 		nbLines := 3
 		if *maxLines > 3 {
-			nbLines = int(r.Int31n(int32(*maxLines) - 3) + 3)
+			nbLines = int(r.Int31n(int32(*maxLines) - 2) + 3)
 		}
 		for j := 0; j < nbLines - 1; j++ {
 			coords = append(coords, []float64 {getRandFloat(r, minLong, maxLong), getRandFloat(r, minLat, maxLat),})
