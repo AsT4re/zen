@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package proto;
+package objects;
 
 message UserLocation {
   uint32 userId = 1;
