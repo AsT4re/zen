@@ -7,3 +7,9 @@ message UserLocation {
   double lat = 2;
   double long = 3;
 }
+
+message UserFence {
+  int32 userId = 1;
+  string placeName = 2;
+  int32 fenceId = 3;
+}
