@@ -2,6 +2,7 @@ package main
 
 import (
 	"astare/zen/dgclient"
+	"astare/zen/randcoords"
 	"bytes"
 	"github.com/pkg/errors"
 	"flag"
@@ -9,7 +10,6 @@ import (
 	randomdata "github.com/Pallinder/go-randomdata"
 	"encoding/json"
 	"os"
-	"strconv"
 	"math/rand"
 	"time"
 )
@@ -28,43 +28,6 @@ var (
 type geometry struct {
 	Type        string         `json:"type"`
 	Coordinates [][][]float64  `json:"coordinates"`
-}
-
-/*
- * Return a random float64 in range [min, max)
-*/
-func getRandFloat(r *rand.Rand, min, max float64) float64 {
-	return r.Float64() * (max - min) + min
-}
-
-/*
- * Returns bounds min max with a certain variation delta
- * from a given float64 value in range [min, max).
- * Bounds cannot exceed min max
-*/
-func getBounds(r *rand.Rand, min, max, delta float64) (float64, float64) {
-	rnd := getRandFloat(r, min, max)
-	bndMin := rnd - delta
-	if bndMin < min {
-		bndMin = min
-	}
-
-	bndMax := rnd + delta
-	if bndMax > max {
-		bndMax = max
-	}
-
-	return bndMin, bndMax
-}
-
-func coordStr(long, lat float64) string {
-	var buffer bytes.Buffer
-	buffer.WriteString("[")
-	buffer.WriteString(strconv.FormatFloat(long, 'f', 7, 64))
-	buffer.WriteString(",")
-	buffer.WriteString(strconv.FormatFloat(lat, 'f', 7, 64))
-	buffer.WriteString("]")
-	return buffer.String()
 }
 
 func main() {
@@ -105,14 +68,14 @@ func run() error {
 	r := rand.New(rand.NewSource(*seed))
 
 	for i := uint(0); i < *nbFences; i++ {
-		minLong, maxLong :=  getBounds(r, -180.0, 180.0, *longDelta)
-		minLat, maxLat := getBounds(r, -85, 85, *latDelta)
+		minLong, maxLong :=  randcoords.GetBounds(r, -180, 180, *longDelta)
+		minLat, maxLat := randcoords.GetBounds(r, -85, 85, *latDelta)
 
 		var coords [][]float64
 
 		firstCoord := []float64 {
-			getRandFloat(r, minLong, maxLong),
-			getRandFloat(r, minLat, maxLat),
+			randcoords.GetRandCoord(r, minLong, maxLong),
+			randcoords.GetRandCoord(r, minLat, maxLat),
 		}
 
 		coords = append(coords, firstCoord)
@@ -122,7 +85,7 @@ func run() error {
 			nbLines = int(r.Int31n(int32(*maxLines) - 2) + 3)
 		}
 		for j := 0; j < nbLines - 1; j++ {
-			coords = append(coords, []float64 {getRandFloat(r, minLong, maxLong), getRandFloat(r, minLat, maxLat),})
+			coords = append(coords, []float64 {randcoords.GetRandCoord(r, minLong, maxLong), randcoords.GetRandCoord(r, minLat, maxLat),})
 		}
 
 		coords = append(coords, firstCoord)
