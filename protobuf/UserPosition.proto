@@ -3,7 +3,7 @@ syntax = "proto3";
 package proto;
 
 message UserLocation {
-  int32 userId = 1;
+  uint32 userId = 1;
   double lat = 2;
   double long = 3;
 }
