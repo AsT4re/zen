@@ -22,16 +22,16 @@ func main() {
 	flag.Parse()
 
 	if *topicUserLoc == "" {
-		log.Fatal("missing mandatory flag 'topic-user-loc'")
+		log.Fatalln("missing mandatory flag 'topic-user-loc'")
 	}
 
 	if *topicUserFence == "" {
-		log.Fatal("missing mandatory flag 'topic-user-fence'")
+		log.Fatalln("missing mandatory flag 'topic-user-fence'")
 	}
 
 	consumer, err := srma.NewConsumer([]string{"localhost:9092"}, nil)
 	if err != nil {
-    panic(err)
+    log.Fatalln(err)
 	}
 
 	defer func() {
@@ -42,7 +42,7 @@ func main() {
 
 	partitionConsumer, err := consumer.ConsumePartition(*topicUserLoc, 0, srma.OffsetOldest)
 	if err != nil {
-    panic(err)
+    log.Panicln(err)
 	}
 
 	defer func() {
@@ -54,7 +54,7 @@ func main() {
 	// Create producer
 	producer, err := srma.NewAsyncProducer([]string{"localhost:9092"}, nil)
 	if err != nil {
-    panic(err)
+    log.Panicln(err)
 	}
 
 	go func() {
@@ -68,10 +68,10 @@ func main() {
 	// Init connection to DGraph
 	dgCl, err := dgclient.NewDGClient(*dgHost, *dgNbConns)
 	if err != nil {
-		log.Fatalln(err)
+		log.Panicln(err)
 	}
 	if err := dgCl.Init(); err != nil {
-		log.Fatalln(err)
+		log.Panicln(err)
 	}
 	defer dgCl.Close()
 

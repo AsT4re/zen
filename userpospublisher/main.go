@@ -21,14 +21,14 @@ func main() {
 	flag.Parse()
 
 	if *topic == "" {
-		log.Fatal("missing mandatory flag 'topic'")
+		log.Fatalln("missing mandatory flag 'topic'")
 	}
 
 	config := srma.NewConfig()
 	config.Producer.Return.Successes = true
 	producer, err := srma.NewAsyncProducer([]string{"localhost:9092"}, config)
 	if err != nil {
-    panic(err)
+    log.Fatalln(err)
 	}
 
 	var (
@@ -58,7 +58,7 @@ func main() {
 	for i := uint(0); i < *nbMsgs; i++ {
     message, err := newUserPosMessage(r)
 		if err != nil {
-			log.Fatal("error creating UserPos message: ", err)
+			log.Println(err)
 			continue
 		}
 
