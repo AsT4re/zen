@@ -32,8 +32,8 @@ func main() {
 	}
 
 	var (
-    wg                          sync.WaitGroup
-    enqueued, successes, errors int
+    wg                sync.WaitGroup
+    successes, errors int
 	)
 
 	wg.Add(1)
@@ -63,7 +63,6 @@ func main() {
 		}
 
 		producer.Input() <- message
-		enqueued++
 	}
 
 	producer.AsyncClose()
