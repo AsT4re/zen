@@ -8,8 +8,6 @@ import(
 	srma "github.com/Shopify/sarama"
 	"log"
 	"math/rand"
-	"os"
-	"os/signal"
 	"sync"
 )
 
@@ -28,15 +26,10 @@ func main() {
 
 	config := srma.NewConfig()
 	config.Producer.Return.Successes = true
-
 	producer, err := srma.NewAsyncProducer([]string{"localhost:9092"}, config)
 	if err != nil {
     panic(err)
 	}
-
-	// Trap SIGINT to trigger a graceful shutdown.
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt)
 
 	var (
     wg                          sync.WaitGroup
@@ -62,22 +55,18 @@ func main() {
 
 	r := rand.New(rand.NewSource(*seed))
 
-ProducerLoop:
 	for i := uint(0); i < *nbMsgs; i++ {
     message, err := newUserPosMessage(r)
 		if err != nil {
 			log.Fatal("error creating UserPos message: ", err)
-			continue ProducerLoop
+			continue
 		}
-    select {
-    case producer.Input() <- message:
-			enqueued++
 
-    case <-signals:
-			producer.AsyncClose() // Trigger a shutdown of the producer.
-			break ProducerLoop
-    }
+		producer.Input() <- message
+		enqueued++
 	}
+
+	producer.AsyncClose()
 
 	wg.Wait()
 
