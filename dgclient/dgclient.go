@@ -1,6 +1,8 @@
 package dgclient
 
 import (
+	"bytes"
+	"strconv"
 	"context"
 	"github.com/dgraph-io/dgraph/client"
 	"github.com/pkg/errors"
@@ -11,10 +13,23 @@ import (
 	"time"
 )
 
+/*
+ * Public structures
+ */
+
 type DGClient struct {
 	conns     []*grpc.ClientConn
 	clientDir string
 	dg        *client.Dgraph
+}
+
+type FenceProps struct {
+	Name        string        `dgraph:"name"`
+}
+
+// Reply structure from GetFencesContainingPos request
+type FencesRep struct {
+	Root        []*FenceProps `dgraph:"fences"`
 }
 
 func NewDGClient(host string, nbConns uint) (*DGClient, error) {
@@ -100,6 +115,28 @@ func (dgCl *DGClient) BatchFlush() {
 	dgCl.dg.BatchFlush()
 }
 
+func (dgCl *DGClient) GetFencesContainingPos(long, lat float64) (FencesRep, error) {
+	getFencesTempl := `{
+    fences(func: contains(loc, $pos)) {
+      name
+    }
+  }`
+
+	var buffer bytes.Buffer
+	buffer.WriteString("[")
+	buffer.WriteString(strconv.FormatFloat(long, 'f', -1, 64))
+	buffer.WriteString(",")
+	buffer.WriteString(strconv.FormatFloat(lat, 'f', -1, 64))
+	buffer.WriteString("]")
+
+	reqMap := make(map[string]string)
+	reqMap["$pos"] = buffer.String()
+
+	var fences FencesRep
+	err := sendRequest(dgCl, &getFencesTempl, &reqMap, &fences)
+	return fences, err
+}
+
 /*
  *  Private functions
  */
@@ -130,6 +167,26 @@ func addEdge(dgCl *DGClient, mnode *client.Node, name string, value interface{})
 
 	if err = dgCl.dg.BatchSet(e); err != nil {
 		return errors.Wrapf(err, "error when setting edge '%v' with value '%v' for batch", name, value)
+	}
+
+	return nil
+}
+
+func sendRequest(dgCl *DGClient, reqStr *string, reqMap *map[string]string, rep interface{}) error {
+	req := client.Req{}
+	req.SetQueryWithVariables(*reqStr, *reqMap)
+
+	resp, err := dgCl.dg.Run(context.Background(), &req)
+	if err != nil {
+		return errors.Wrap(err, "error when executing request")
+	}
+
+	if len(resp.N[0].Children) == 0 {
+		return nil
+	}
+
+	if err = client.Unmarshal(resp.N, rep); err != nil {
+		return errors.Wrap(err, "error when unmarshaling dgraph reply")
 	}
 
 	return nil
