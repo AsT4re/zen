@@ -73,19 +73,42 @@ func run() error {
 
 		var coords [][]float64
 
-		firstCoord := []float64 {
-			randcoords.GetRandCoord(r, minLong, maxLong),
-			randcoords.GetRandCoord(r, minLat, maxLat),
-		}
-
-		coords = append(coords, firstCoord)
-
-		nbLines := 3
+				nbLines := 3
 		if *maxLines > 3 {
 			nbLines = int(r.Int31n(int32(*maxLines) - 2) + 3)
 		}
-		for j := 0; j < nbLines - 1; j++ {
+
+		longDiv := int(float64(nbLines + 1) / 2.0)
+		vertLongDelta := (maxLong - minLong) / float64(longDiv)
+		vertLatDelta := (maxLat - minLat) / 2
+
+		var firstCoord []float64
+
+		maxLong = minLong + vertLongDelta
+		minLat += vertLatDelta
+		for i := 0; i < longDiv; i++ {
+			genCoord := []float64 {randcoords.GetRandCoord(r, minLong, maxLong), randcoords.GetRandCoord(r, minLat, maxLat),}
+			if i == 0 {
+				firstCoord = genCoord
+			}
+			coords = append(coords, genCoord)
+			if i != longDiv - 1 {
+				minLong += vertLongDelta
+				maxLong += vertLongDelta
+			}
+		}
+
+		maxLat = minLat
+		minLat = maxLat - vertLatDelta
+		for i := longDiv; i < nbLines; i++ {
 			coords = append(coords, []float64 {randcoords.GetRandCoord(r, minLong, maxLong), randcoords.GetRandCoord(r, minLat, maxLat),})
+			if i == nbLines - 2 && nbLines % 2 == 1 {
+				minLong -= 2 * vertLongDelta
+				maxLong -= 2 * vertLongDelta
+			} else {
+				minLong -= vertLongDelta
+				maxLong -= vertLongDelta
+			}
 		}
 
 		coords = append(coords, firstCoord)
