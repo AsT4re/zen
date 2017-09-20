@@ -24,43 +24,8 @@ var (
 type ConsumerMsgInfos struct {
 	Offset    int64
 	Partition int32
+	Topic     string
 	NbFences  int
-}
-
-type MsgAckSynchronizer struct {
-	markable int64
-	acked map[int64]bool
-	consumer *cluster.Consumer
-	mux sync.Mutex
-}
-
-// Mark a specific offset as acknowledged
-// Only mark offset if all previous offsets have been acknowledged too
-func (synchronizer *MsgAckSynchronizer) ack(off int64, partition int32) {
-	synchronizer.mux.Lock()
-	defer synchronizer.mux.Unlock()
-	if off == synchronizer.markable {
-		next := off + 1
-		for {
-			_, ok := synchronizer.acked[next]
-			if !ok {
-				break
-			}
-			delete(synchronizer.acked, next)
-			next++
-		}
-		synchronizer.markable = next
-		synchronizer.consumer.MarkPartitionOffset(*topicUserLoc, partition, next-1, "")
-	} else {
-		synchronizer.acked[off] = true
-	}
-}
-
-func (synchronizer *MsgAckSynchronizer) lastMarkedOffset() (int64, error) {
-	if synchronizer.markable == 0 {
-		return 0, fmt.Errorf("Any offset has been marked yet for this partition")
-	}
-	return synchronizer.markable - 1, nil
 }
 
 func main() {
@@ -95,44 +60,7 @@ func main() {
 		log.Panicln(err)
 	}
 
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt)
-
-	// Consume first message in order to initialize synchronize
-	var msg *sarama.ConsumerMessage
-	select {
-	case msg = <-consumer.Messages():
-	case <-signals:
-	}
-
-	if msg == nil {
-		if err := consumer.Close(); err != nil {
-				log.Println(err)
-		}
-		fmt.Println("Successfully processed messages: 0")
-		return
-	}
-
-	synchronizer := &MsgAckSynchronizer {
-		markable: msg.Offset,
-		acked: make(map[int64]bool),
-		consumer: consumer,
-	}
-
-	defer func(first int64) {
-		if err := consumer.Close(); err != nil {
-			log.Println(err)
-		}
-
-		var nbConsumed int64
-		if last, err := synchronizer.lastMarkedOffset(); err == nil {
-			nbConsumed = last - first + 1
-		}
-
-		fmt.Printf("Successfully processed messages: %d\n", nbConsumed)
-	}(msg.Offset)
-
-		// Create producer
+	// Create producer
 	producerConfig := sarama.NewConfig()
 	producerConfig.Producer.Return.Successes = true
 	producer, err := sarama.NewAsyncProducer([]string{"localhost:9092"}, producerConfig)
@@ -140,22 +68,35 @@ func main() {
     log.Panicln(err)
 	}
 
-	var wgMsgHandle sync.WaitGroup
-	log.Printf("Handle message offset %d\n", msg.Offset)
-	wgMsgHandle.Add(1)
-	go handleMessage(msg, dgCl, &wgMsgHandle, consumer, producer, synchronizer)
+	syncers := &MsgAckSyncronizersMap{
+		t: make(map[string]*MsgAckSyncronizer),
+	}
 
 	var wgProducerAckChans sync.WaitGroup
 	wgProducerAckChans.Add(1)
-	go handleProducerAcks(&wgProducerAckChans, consumer, producer, synchronizer)
+	go handleProducerAcks(&wgProducerAckChans, consumer, producer, syncers)
+
+	var wgMsgHandle sync.WaitGroup
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt)
 
 ConsumerLoop:
 	for {
     select {
     case msg := <-consumer.Messages():
 			log.Printf("Handle message offset %d\n", msg.Offset)
+			syncer, ok := syncers.t[msg.Topic]
+			if !ok {
+				fmt.Printf("topic: %s\n", msg.Topic)
+				// Create new message ack syncronizer on first message for a topic
+				syncers.t[msg.Topic] = &MsgAckSyncronizer {
+					markable: msg.Offset,
+					acked: make(map[int64]bool),
+					consumer: consumer,
+				}
+			}
 			wgMsgHandle.Add(1)
-			go handleMessage(msg, dgCl, &wgMsgHandle, consumer, producer, synchronizer)
+			go handleMessage(msg, dgCl, &wgMsgHandle, consumer, producer, syncer)
     case <-signals:
 			break ConsumerLoop
     }
@@ -165,9 +106,15 @@ ConsumerLoop:
 	wgMsgHandle.Wait()
 	producer.AsyncClose()
 	wgProducerAckChans.Wait()
+
+	if err := consumer.Close(); err != nil {
+		log.Println(err)
+	}
+
+	syncers.PrintNbMarkedOffsets()
 }
 
-func handleAck(offRem map[int64]int, consumerInfos *ConsumerMsgInfos, synchronizer *MsgAckSynchronizer) {
+func handleAck(offRem map[int64]int, consumerInfos *ConsumerMsgInfos, syncer *MsgAckSyncronizer) {
 	v, ok := offRem[consumerInfos.Offset]
 	if !ok {
 		offRem[consumerInfos.Offset] = consumerInfos.NbFences
@@ -175,16 +122,16 @@ func handleAck(offRem map[int64]int, consumerInfos *ConsumerMsgInfos, synchroniz
 	}
 
 	if v == 1 {
-		synchronizer.ack(consumerInfos.Offset, consumerInfos.Partition)
+		syncer.Ack(consumerInfos.Offset, consumerInfos.Partition)
 		delete(offRem, consumerInfos.Offset)
 	} else {
 		offRem[consumerInfos.Offset] = v - 1
 	}
 }
 
-func handleProducerAcks(wg *sync.WaitGroup, consumer *cluster.Consumer, producer sarama.AsyncProducer, synchronizer *MsgAckSynchronizer) {
+func handleProducerAcks(wg *sync.WaitGroup, consumer *cluster.Consumer, producer sarama.AsyncProducer, syncers *MsgAckSyncronizersMap) {
 	defer wg.Done()
-	offRem := make(map[int64]int)
+	offRem := make(map[string]map[int64]int)
 	successesChan := producer.Successes()
 	errChan := producer.Errors()
 	for {
@@ -194,15 +141,23 @@ func handleProducerAcks(wg *sync.WaitGroup, consumer *cluster.Consumer, producer
 				successesChan = nil
 				break
 			}
-			consumerInfos := msg.Metadata.(*ConsumerMsgInfos)
-			handleAck(offRem, consumerInfos, synchronizer)
+			infos := msg.Metadata.(*ConsumerMsgInfos)
+			_, okMap := offRem[infos.Topic]
+			if !okMap {
+				offRem[infos.Topic] = make(map[int64]int)
+			}
+			handleAck(offRem[infos.Topic], infos, syncers.t[infos.Topic])
 		case err, ok := <-errChan:
 			if !ok {
 				errChan = nil
 				break
 			}
-			consumerInfos := err.Msg.Metadata.(*ConsumerMsgInfos)
-			handleAck(offRem, consumerInfos, synchronizer)
+			infos := err.Msg.Metadata.(*ConsumerMsgInfos)
+			_, okMap := offRem[infos.Topic]
+			if !okMap {
+				offRem[infos.Topic] = make(map[int64]int)
+			}
+			handleAck(offRem[infos.Topic], infos, syncers.t[infos.Topic])
 		}
 
 		if successesChan == nil && errChan == nil {
@@ -216,7 +171,7 @@ func handleMessage(msg *sarama.ConsumerMessage,
 	                 wg *sync.WaitGroup,
 	                 consumer *cluster.Consumer,
 	                 producer sarama.AsyncProducer,
-	                 synchronizer *MsgAckSynchronizer) {
+	                 syncer *MsgAckSyncronizer) {
 	defer wg.Done()
 	userPos := &objects.UserLocation {}
 	if err := proto.Unmarshal(msg.Value, userPos); err != nil {
@@ -234,13 +189,14 @@ func handleMessage(msg *sarama.ConsumerMessage,
 
 	if nbFences == 0 {
 		fmt.Printf("No fences, ack message: %d\n", msg.Offset)
-		synchronizer.ack(msg.Offset, msg.Partition)
+		syncer.Ack(msg.Offset, msg.Partition)
 		return
 	}
 
 	metadata := &ConsumerMsgInfos{
 		Offset: msg.Offset,
 		Partition: msg.Partition,
+		Topic: msg.Topic,
 		NbFences: nbFences,
 	}
 
