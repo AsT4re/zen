@@ -49,7 +49,7 @@ func newInputsAcksHandler(cons *cluster.Consumer) *inputsAcksHandler {
 	}
 }
 
-func (h *inputsAcksHandler) ack(topic string, partition int32, off int64) {
+func (h *inputsAcksHandler) firstOffsetInit(topic string, partition int32, off int64) {
 	h.mux.Lock()
 	defer h.mux.Unlock()
 
@@ -69,13 +69,18 @@ func (h *inputsAcksHandler) ack(topic string, partition int32, off int64) {
 		}
 		p[partition] = syncer
 	}
+}
 
-	syncer.ack(h.cons, topic, partition, off)
+func (h *inputsAcksHandler) ack(topic string, partition int32, off int64) {
+	h.mux.Lock()
+	defer h.mux.Unlock()
+
+	h.m[topic][partition].ack(h.cons, topic, partition, off)
 }
 
 //If called after consumer.close() and no errors have been notified
 //due to kafka commit request issue, the marked offsets are actually
-//the successfully committed offsets.
+//the committed offsets if commit request succeeded on kafka
 func (h *inputsAcksHandler) printNbMarkedOffsets() {
 	h.mux.Lock()
 	defer h.mux.Unlock()

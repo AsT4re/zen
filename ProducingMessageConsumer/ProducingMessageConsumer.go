@@ -71,6 +71,7 @@ ConsumerLoop:
 	for {
     select {
     case msg := <-pmc.consumer.Messages():
+			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
 			log.Printf("Handle message offset %d\n", msg.Offset)
 			wgMgsHandlers.Add(1)
 			go func(msg *sarama.ConsumerMessage) {
