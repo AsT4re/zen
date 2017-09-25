@@ -14,7 +14,10 @@ type ProducingMessageConsumer struct {
 	consumer   *cluster.Consumer
 	producer   sarama.AsyncProducer
 	prodTopic  string
-	msgHandler MessageHandler
+	msgHand    MessageHandler
+	inAcksHand *inputsAcksHandler
+	wgOutAcks  sync.WaitGroup
+	wgMsgHand  sync.WaitGroup
 }
 
 type inputMetadatas struct {
@@ -28,7 +31,7 @@ func NewProducingMessageConsumer(brokers     []string,
 	                               consGroupId string,
                                  consTopic   string,
 	                               prodTopic   string,
-	                               msgHandler  MessageHandler) (*ProducingMessageConsumer, error) {
+	                               msgHand     MessageHandler) (*ProducingMessageConsumer, error) {
 	config := cluster.NewConfig()
 	// Set config for consumer
 	config.Consumer.Return.Errors = true
@@ -38,7 +41,7 @@ func NewProducingMessageConsumer(brokers     []string,
 
 	pmc := &ProducingMessageConsumer {
 		prodTopic: prodTopic,
-		msgHandler: msgHandler,
+		msgHand: msgHand,
 	}
 
 	var err error
@@ -51,20 +54,21 @@ func NewProducingMessageConsumer(brokers     []string,
 	// Create producer for messages to be published
 	pmc.producer, err = sarama.NewAsyncProducer(brokers, &config.Config)
 	if err != nil {
+		if errCons := pmc.consumer.Close(); errCons != nil {
+			log.Printf("Fail to close consumer: %v\n", errCons)
+		}
     return nil, errors.Wrap(err, "Create producer failed")
 	}
+
+	pmc.inAcksHand = newInputsAcksHandler(pmc.consumer)
+
+	pmc.wgOutAcks.Add(1)
+	go pmc.handleOutputsAcks()
 
 	return pmc, nil
 }
 
 func (pmc *ProducingMessageConsumer) Consume() {
-	inAcksHandler := newInputsAcksHandler(pmc.consumer)
-
-	var wgOutAcksHandler sync.WaitGroup
-	wgOutAcksHandler.Add(1)
-	go handleOutputsAcks(&wgOutAcksHandler, pmc.producer, inAcksHandler)
-
-	var wgMgsHandlers sync.WaitGroup
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt)
 ConsumerLoop:
@@ -73,58 +77,60 @@ ConsumerLoop:
     case msg := <-pmc.consumer.Messages():
 			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
 			log.Printf("Handle message offset %d\n", msg.Offset)
-			wgMgsHandlers.Add(1)
-			go func(msg *sarama.ConsumerMessage) {
-				defer wgMgsHandlers.Done()
-				outputs, err := pmc.msgHandler.Process(msg.Value)
-				if err == nil {
-					// Produce outputs
-					nbOutputs := len(outputs)
-					if nbOutputs == 0 {
-						inAcksHandler.ack(msg.Topic, msg.Partition, msg.Offset)
-						return
-					}
-					for _, out := range outputs {
-						metadatas := &inputMetadatas{
-							Offset: msg.Offset,
-							Partition: msg.Partition,
-							Topic: msg.Topic,
-							NbOutputs: nbOutputs,
-						}
-						pmc.producer.Input() <- &sarama.ProducerMessage{
-							Topic: pmc.prodTopic,
-							Value: sarama.ByteEncoder(out),
-							Metadata: metadatas,
-						}
-					}
-				} else {
-					// Process failed, producing input on retry topic
-				}
-			}(msg)
+			pmc.wgMsgHand.Add(1)
+			go pmc.processMessage(msg)
     case <-signals:
 			break ConsumerLoop
     }
 	}
+}
 
+func (pmc *ProducingMessageConsumer) Close() {
 	log.Printf("\nFinish processing already handled messages...\n")
-	wgMgsHandlers.Wait()
+	pmc.wgMsgHand.Wait()
 	pmc.producer.AsyncClose()
-	wgOutAcksHandler.Wait()
+	pmc.wgOutAcks.Wait()
 
 	if err := pmc.consumer.Close(); err != nil {
 		log.Println(err)
 	}
 
-	inAcksHandler.printNbMarkedOffsets()
+	pmc.inAcksHand.printNbMarkedOffsets()
 }
 
-func handleOutputsAcks(wg            *sync.WaitGroup,
-                       producer      sarama.AsyncProducer,
-	                     inAcksHandler *inputsAcksHandler) {
-	defer wg.Done()
+func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage) {
+	defer pmc.wgMsgHand.Done()
+	outputs, err := pmc.msgHand.Process(msg.Value)
+	if err == nil {
+		// Produce outputs
+		nbOutputs := len(outputs)
+		if nbOutputs == 0 {
+			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
+			return
+		}
+		for _, out := range outputs {
+			metadatas := &inputMetadatas{
+				Offset: msg.Offset,
+				Partition: msg.Partition,
+				Topic: msg.Topic,
+				NbOutputs: nbOutputs,
+			}
+			pmc.producer.Input() <- &sarama.ProducerMessage{
+				Topic: pmc.prodTopic,
+				Value: sarama.ByteEncoder(out),
+				Metadata: metadatas,
+			}
+		}
+	} else {
+		// Process failed, producing input on retry topic
+	}
+}
+
+func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
+	defer pmc.wgOutAcks.Done()
 	offRem := make(map[string]map[int32]map[int64]int)
-	successesChan := producer.Successes()
-	errChan := producer.Errors()
+	successesChan := pmc.producer.Successes()
+	errChan := pmc.producer.Errors()
 	for {
 		var ok bool
 		var msg *sarama.ProducerMessage
@@ -170,7 +176,7 @@ func handleOutputsAcks(wg            *sync.WaitGroup,
 			}
 
 			if v == 1 {
-				inAcksHandler.ack(inMetas.Topic, inMetas.Partition, inMetas.Offset)
+				pmc.inAcksHand.ack(inMetas.Topic, inMetas.Partition, inMetas.Offset)
 				delete(o, inMetas.Offset)
 			} else {
 				o[inMetas.Offset] = v - 1

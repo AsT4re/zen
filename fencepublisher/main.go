@@ -42,6 +42,7 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	defer producingMsgCons.Close()
 	producingMsgCons.Consume()
 }
 
