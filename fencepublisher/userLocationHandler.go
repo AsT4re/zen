@@ -40,6 +40,17 @@ func (ulh *userLocationHandler) Unmarshal(input []byte) (*pmc.Message, error) {
 	}, nil
 }
 
+func (ulh *userLocationHandler) Marshal(input *pmc.Message) ([]byte, error) {
+	data, err := proto.Marshal(&objects.UserLocation{
+		Metas: input.Metas,
+		Value: input.Value.(*objects.UserLocationValue),
+	})
+	if err != nil {
+		return nil, errors.Wrap(err, "Fail to marshall user location")
+	}
+	return data, nil
+}
+
 func (ulh *userLocationHandler) Process(input interface{}) ([][]byte, error) {
 	userLoc := input.(*objects.UserLocationValue)
 	fences, err := ulh.dgCl.GetFencesContainingPos(userLoc.Long, userLoc.Lat)

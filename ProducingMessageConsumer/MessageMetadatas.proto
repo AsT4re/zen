@@ -1,8 +1,10 @@
 syntax = "proto3";
 
 package pmc;
-option go_package = "astare/zen/ProducingMessageConsumer";
+option go_package = "astare/zen/ProducingMessageConsumer;pmc";
 
 message MessageMetadatas {
-  string schedule = 1;
+  bytes schedule = 1;
+  uint32 maxRetry = 2;
+  uint32 retry = 3;
 }

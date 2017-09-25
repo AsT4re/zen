@@ -8,9 +8,12 @@ import(
 	"os/signal"
 	"log"
 	"sync"
+	"time"
+	"strconv"
 )
 
 type ProducingMessageConsumer struct {
+	maxRetry   uint32
 	consumer   *cluster.Consumer
 	producer   sarama.AsyncProducer
 	prodTopic  string
@@ -18,6 +21,8 @@ type ProducingMessageConsumer struct {
 	inAcksHand *inputsAcksHandler
 	wgOutAcks  sync.WaitGroup
 	wgMsgHand  sync.WaitGroup
+	timers     map[string]map[int32]map[int64]*time.Timer
+	timersMux  sync.Mutex
 }
 
 type inputMetadatas struct {
@@ -27,11 +32,56 @@ type inputMetadatas struct {
 	NbOutputs int
 }
 
+const lenLatencies = 9
+
+var latencies = [9]time.Duration {
+	time.Duration(2)*time.Second,
+	time.Duration(2)*time.Second,
+	time.Duration(10)*time.Second,
+	time.Duration(30)*time.Second,
+	time.Duration(1)*time.Minute,
+	time.Duration(10)*time.Minute,
+	time.Duration(1)*time.Hour,
+	time.Duration(1)*time.Hour,
+	time.Duration(24)*time.Hour,
+}
+
+var topicsByRetry [lenLatencies]string
+
+func getRetryTopicNames(topName string) []string {
+	var topics []string
+
+	m := make(map[time.Duration][]int)
+	for i, lat := range latencies {
+		m[lat] = append(m[lat], i)
+	}
+
+	for key, val := range m {
+		var valStr string
+		if key < time.Second {
+			valStr = strconv.FormatFloat(float64(key) / float64(time.Second), 'f', -1, 64)
+		} else {
+			valStr = strconv.FormatInt(int64(key / time.Second), 10)
+		}
+		name := topName + "-" + valStr
+		topics = append(topics, name)
+		for _, ind := range val {
+			topicsByRetry[ind] = name
+		}
+	}
+
+	return topics
+}
+
 func NewProducingMessageConsumer(brokers     []string,
 	                               consGroupId string,
-                                 consTopic   string,
+	                               consTopic   string,
 	                               prodTopic   string,
-	                               msgHand     MessageHandler) (*ProducingMessageConsumer, error) {
+	                               msgHand     MessageHandler,
+	                               maxRetry    uint32) (*ProducingMessageConsumer, error) {
+	if int(maxRetry) >  lenLatencies {
+		return nil, errors.Errorf("max retries must be <= %d", lenLatencies)
+	}
 	config := cluster.NewConfig()
 	// Set config for consumer
 	config.Consumer.Return.Errors = true
@@ -40,13 +90,16 @@ func NewProducingMessageConsumer(brokers     []string,
 	config.Producer.Return.Successes = true
 
 	pmc := &ProducingMessageConsumer {
+		maxRetry: maxRetry,
 		prodTopic: prodTopic,
 		msgHand: msgHand,
+		timers: make(map[string]map[int32]map[int64]*time.Timer),
 	}
 
 	var err error
+	topics := append(getRetryTopicNames(consTopic), consTopic)
 	// Create cluster of consumer for handling messages
-	pmc.consumer, err = cluster.NewConsumer(brokers, consGroupId, []string{consTopic}, config)
+	pmc.consumer, err = cluster.NewConsumer(brokers, consGroupId, topics, config)
 	if err != nil {
 		return nil, errors.Wrap(err, "Create cluster of consumers failed")
 	}
@@ -76,41 +129,39 @@ ConsumerLoop:
     select {
     case msg := <-pmc.consumer.Messages():
 			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
-			log.Printf("Handle message offset %d\n", msg.Offset)
 			handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
 			if err != nil {
-				// Todo: put in dead letter queue
-				log.Println("Unable to unmarshal message")
+				// Todo: dead letter
+				log.Printf("Putting in dead letter: unable to Unmarshal message\n", err)
+				pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
 				continue ConsumerLoop
 			}
-			pmc.wgMsgHand.Add(1)
-			go func(msg *sarama.ConsumerMessage, handMsg *Message) {
-				defer pmc.wgMsgHand.Done()
-				outputs, err := pmc.msgHand.Process(handMsg.Value)
-				if err != nil {
-					// Todo: put in retry queue or dead letter if all retries done
-					return
-				}
-				// Produce outputs
-				nbOutputs := len(outputs)
-				if nbOutputs == 0 {
+
+			if handMsg.Metas != nil {
+				var sched time.Time
+				if err := sched.UnmarshalText(handMsg.Metas.Schedule); err != nil {
+					// Todo: dead letter
+					log.Println("Putting in dead letter: unable to Unmarshal date time")
 					pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
-					return
+					continue ConsumerLoop
 				}
-				for _, out := range outputs {
-					metadatas := &inputMetadatas{
-						Offset: msg.Offset,
-						Partition: msg.Partition,
-						Topic: msg.Topic,
-						NbOutputs: nbOutputs,
-					}
-					pmc.producer.Input() <- &sarama.ProducerMessage{
-						Topic: pmc.prodTopic,
-						Value: sarama.ByteEncoder(out),
-						Metadata: metadatas,
+				pmc.wgMsgHand.Add(1)
+				f := func(msg *sarama.ConsumerMessage) func() {
+					return func() {
+						pmc.processMessage(msg, handMsg)
+						pmc.timersMux.Lock()
+						delete(pmc.timers[msg.Topic][msg.Partition], msg.Offset)
+						pmc.timersMux.Unlock()
 					}
 				}
-			}(msg, handMsg)
+				pmc.timersMux.Lock()
+				timer := time.AfterFunc(time.Until(sched), f(msg))
+				pmc.addTimer(timer, msg.Topic, msg.Partition, msg.Offset)
+				pmc.timersMux.Unlock()
+			} else {
+				pmc.wgMsgHand.Add(1)
+				go pmc.processMessage(msg, handMsg)
+			}
     case <-signals:
 			break ConsumerLoop
     }
@@ -118,7 +169,22 @@ ConsumerLoop:
 }
 
 func (pmc *ProducingMessageConsumer) Close() {
-	log.Printf("\nFinish processing already handled messages...\n")
+	log.Printf("Stop sleeping routines for retry messages...\n")
+	var nbStopped int
+	pmc.timersMux.Lock()
+	for _, p := range pmc.timers {
+		for _, o := range p {
+			for _, t := range o {
+				if t.Stop() {
+					pmc.wgMsgHand.Done()
+					nbStopped++
+				}
+			}
+		}
+	}
+	pmc.timersMux.Unlock()
+	log.Printf("Nb stopped routines: %d\n", nbStopped)
+	log.Printf("Finish processing already handled messages...\n")
 	pmc.wgMsgHand.Wait()
 	pmc.producer.AsyncClose()
 	pmc.wgOutAcks.Wait()
@@ -128,6 +194,92 @@ func (pmc *ProducingMessageConsumer) Close() {
 	}
 
 	pmc.inAcksHand.printNbMarkedOffsets()
+}
+
+func (pmc *ProducingMessageConsumer) addTimer(timer *time.Timer, topic string, part int32, off int64) {
+	p, ok := pmc.timers[topic]
+	if !ok {
+		p = make(map[int32]map[int64]*time.Timer)
+		pmc.timers[topic] = p
+	}
+
+	var o map[int64]*time.Timer
+	o, ok = p[part]
+	if !ok {
+		o = make(map[int64]*time.Timer)
+		p[part] = o
+	}
+	o[off] = timer
+}
+
+func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage, handMsg *Message) {
+	defer pmc.wgMsgHand.Done()
+	prodMetas := &inputMetadatas{
+		Offset: msg.Offset,
+		Partition: msg.Partition,
+		Topic: msg.Topic,
+	}
+	outputs, err := pmc.msgHand.Process(handMsg.Value)
+	if err != nil {
+		log.Printf("Processing message failed: %v\n", err)
+		if handMsg.Metas != nil {
+			handMsg.Metas.Retry++
+		} else {
+			handMsg.Metas = &MessageMetadatas{
+				MaxRetry: pmc.maxRetry,
+				Retry: 0,
+			}
+		}
+
+		if handMsg.Metas.Retry == handMsg.Metas.MaxRetry {
+			// Todo: dead letter
+			log.Println("Putting in dead letter: no more retry")
+			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
+			return
+		}
+
+		newTi :=  time.Now().Add(latencies[handMsg.Metas.Retry])
+		handMsg.Metas.Schedule, err = newTi.MarshalText()
+		if err != nil {
+			log.Panicln(err)
+		}
+
+		outEncoded, err := pmc.msgHand.Marshal(&Message{
+			Value: handMsg.Value,
+			Metas: handMsg.Metas,
+		})
+
+		if err != nil {
+			log.Panicln(err)
+		}
+
+		retryTopic := topicsByRetry[handMsg.Metas.Retry]
+		log.Printf("Publish on retry queue: %s", retryTopic)
+		// Todo: put in retry queue or dead letter if all retries done
+		prodMetas.NbOutputs = 1
+		pmc.producer.Input() <- &sarama.ProducerMessage{
+			Topic: retryTopic,
+			Value: sarama.ByteEncoder(outEncoded),
+			Metadata: prodMetas,
+		}
+	} else {
+		// Produce outputs
+		nbOutputs := len(outputs)
+		//log.Printf("NbFences = %d (Input:'%s'p:'%d'o:'%d')\n", nbOutputs, msg.Topic, msg.Partition, msg.Offset)
+		if nbOutputs == 0 {
+			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
+			return
+		}
+		prodMetas.NbOutputs = nbOutputs
+
+		for _, out := range outputs {
+			pmc.producer.Input() <- &sarama.ProducerMessage{
+				Topic: pmc.prodTopic,
+				Value: sarama.ByteEncoder(out),
+				Metadata: prodMetas,
+			}
+		}
+	}
 }
 
 func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
@@ -153,7 +305,7 @@ func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
 				break
 			}
 			inMetas = err.Msg.Metadata.(*inputMetadatas)
-			log.Printf("Producing output error (Input:'%s'p:'%d'o:'%d')",
+			log.Printf("Producing output error (Input:'%s'p:'%d'o:'%d')\n",
 				         inMetas.Topic, inMetas.Partition, inMetas.Offset)
 		}
 
