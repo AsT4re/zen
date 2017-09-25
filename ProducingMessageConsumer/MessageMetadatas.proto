@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package pmc;
+option go_package = "astare/zen/ProducingMessageConsumer";
+
+message MessageMetadatas {
+  string schedule = 1;
+}

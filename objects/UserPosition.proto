@@ -2,10 +2,13 @@ syntax = "proto3";
 
 package objects;
 
+import "MessageMetadatas.proto";
+
 message UserLocation {
-  uint32 userId = 1;
-  double lat = 2;
-  double long = 3;
+  pmc.MessageMetadatas metas = 1;
+  uint32 userId = 2;
+  double lat = 3;
+  double long = 4;
 }
 
 message UserFence {
