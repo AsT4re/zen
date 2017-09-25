@@ -77,8 +77,40 @@ ConsumerLoop:
     case msg := <-pmc.consumer.Messages():
 			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
 			log.Printf("Handle message offset %d\n", msg.Offset)
+			handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
+			if err != nil {
+				// Todo: put in dead letter queue
+				log.Println("Unable to unmarshal message")
+				continue ConsumerLoop
+			}
 			pmc.wgMsgHand.Add(1)
-			go pmc.processMessage(msg)
+			go func(msg *sarama.ConsumerMessage, handMsg *Message) {
+				defer pmc.wgMsgHand.Done()
+				outputs, err := pmc.msgHand.Process(handMsg.Value)
+				if err != nil {
+					// Todo: put in retry queue or dead letter if all retries done
+					return
+				}
+				// Produce outputs
+				nbOutputs := len(outputs)
+				if nbOutputs == 0 {
+					pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
+					return
+				}
+				for _, out := range outputs {
+					metadatas := &inputMetadatas{
+						Offset: msg.Offset,
+						Partition: msg.Partition,
+						Topic: msg.Topic,
+						NbOutputs: nbOutputs,
+					}
+					pmc.producer.Input() <- &sarama.ProducerMessage{
+						Topic: pmc.prodTopic,
+						Value: sarama.ByteEncoder(out),
+						Metadata: metadatas,
+					}
+				}
+			}(msg, handMsg)
     case <-signals:
 			break ConsumerLoop
     }
@@ -96,34 +128,6 @@ func (pmc *ProducingMessageConsumer) Close() {
 	}
 
 	pmc.inAcksHand.printNbMarkedOffsets()
-}
-
-func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage) {
-	defer pmc.wgMsgHand.Done()
-	outputs, err := pmc.msgHand.Process(msg.Value)
-	if err == nil {
-		// Produce outputs
-		nbOutputs := len(outputs)
-		if nbOutputs == 0 {
-			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
-			return
-		}
-		for _, out := range outputs {
-			metadatas := &inputMetadatas{
-				Offset: msg.Offset,
-				Partition: msg.Partition,
-				Topic: msg.Topic,
-				NbOutputs: nbOutputs,
-			}
-			pmc.producer.Input() <- &sarama.ProducerMessage{
-				Topic: pmc.prodTopic,
-				Value: sarama.ByteEncoder(out),
-				Metadata: metadatas,
-			}
-		}
-	} else {
-		// Process failed, producing input on retry topic
-	}
 }
 
 func (pmc *ProducingMessageConsumer) handleOutputsAcks() {

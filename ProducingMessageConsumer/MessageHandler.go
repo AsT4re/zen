@@ -1,5 +1,11 @@
 package pmc
 
+type Message struct {
+	Value interface{}
+	Metas *MessageMetadatas
+}
+
 type MessageHandler interface {
-	Process(input []byte) ([][]byte, error)
+	Unmarshal(input []byte) (*Message, error)
+	Process(input interface{}) ([][]byte, error)
 }

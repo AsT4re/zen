@@ -3,6 +3,7 @@ package main
 import (
 	dgclient "astare/zen/dgclient"
 	objects  "astare/zen/objects"
+	pmc      "astare/zen/ProducingMessageConsumer"
 	proto    "github.com/golang/protobuf/proto"
 	errors   "github.com/pkg/errors"
 )
@@ -27,12 +28,20 @@ func NewUserLocationHandler(dgNbConns uint, dgHost string) (*userLocationHandler
 	return handler, nil
 }
 
-func (ulh *userLocationHandler) Process(input []byte) ([][]byte, error) {
+func (ulh *userLocationHandler) Unmarshal(input []byte) (*pmc.Message, error) {
 	userLoc := &objects.UserLocation {}
 	if err := proto.Unmarshal(input, userLoc); err != nil {
 		return nil, errors.Wrap(err, "Fail to get UserLocation object")
 	}
 
+	return &pmc.Message{
+		Value: userLoc.GetValue(),
+		Metas: userLoc.GetMetas(),
+	}, nil
+}
+
+func (ulh *userLocationHandler) Process(input interface{}) ([][]byte, error) {
+	userLoc := input.(*objects.UserLocationValue)
 	fences, err := ulh.dgCl.GetFencesContainingPos(userLoc.Long, userLoc.Lat)
 	if err != nil {
 		return nil, err

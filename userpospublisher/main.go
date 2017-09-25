@@ -74,9 +74,11 @@ func main() {
 
 func newUserPosMessage(r *rand.Rand) (*srma.ProducerMessage, error) {
 	userPos := &objects.UserLocation {
-		UserId: r.Uint32(),
-		Lat: randcoords.GetRandCoord(r, -85, 85),
-		Long: randcoords.GetRandCoord(r, -180, 180),
+		Value: &objects.UserLocationValue {
+			UserId: r.Uint32(),
+			Lat: randcoords.GetRandCoord(r, -85, 85),
+			Long: randcoords.GetRandCoord(r, -180, 180),
+		},
 	}
 
 	data, err := proto.Marshal(userPos)
