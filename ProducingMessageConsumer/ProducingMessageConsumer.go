@@ -17,6 +17,7 @@ type ProducingMessageConsumer struct {
 	consumer   *cluster.Consumer
 	producer   sarama.AsyncProducer
 	prodTopic  string
+	consTopic  string
 	msgHand    MessageHandler
 	inAcksHand *inputsAcksHandler
 	wgOutAcks  sync.WaitGroup
@@ -34,7 +35,7 @@ type inputMetadatas struct {
 
 const lenLatencies = 9
 
-var latencies = [9]time.Duration {
+var latencies = [lenLatencies]time.Duration {
 	time.Duration(2)*time.Second,
 	time.Duration(2)*time.Second,
 	time.Duration(10)*time.Second,
@@ -92,6 +93,7 @@ func NewProducingMessageConsumer(brokers     []string,
 	pmc := &ProducingMessageConsumer {
 		maxRetry: maxRetry,
 		prodTopic: prodTopic,
+		consTopic: consTopic,
 		msgHand: msgHand,
 		timers: make(map[string]map[int32]map[int64]*time.Timer),
 	}
@@ -131,18 +133,16 @@ ConsumerLoop:
 			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
 			handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
 			if err != nil {
-				// Todo: dead letter
-				log.Printf("Putting in dead letter: unable to Unmarshal message\n", err)
-				pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
+				log.Printf("Publishing in dead letter: unable to Unmarshal message: %v\n", err)
+				pmc.publishDeadLetter(msg)
 				continue ConsumerLoop
 			}
 
 			if handMsg.Metas != nil {
 				var sched time.Time
 				if err := sched.UnmarshalText(handMsg.Metas.Schedule); err != nil {
-					// Todo: dead letter
-					log.Println("Putting in dead letter: unable to Unmarshal date time")
-					pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
+					log.Printf("Publishing in dead letter: unable to Unmarshal date time: %v\n", err)
+					pmc.publishDeadLetter(msg)
 					continue ConsumerLoop
 				}
 				pmc.wgMsgHand.Add(1)
@@ -196,6 +196,19 @@ func (pmc *ProducingMessageConsumer) Close() {
 	pmc.inAcksHand.printNbMarkedOffsets()
 }
 
+func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessage) {
+	pmc.producer.Input() <- &sarama.ProducerMessage{
+		Topic: pmc.consTopic + "-dead",
+		Value: sarama.ByteEncoder(msg.Value),
+		Metadata: &inputMetadatas{
+			Offset: msg.Offset,
+			Partition: msg.Partition,
+			Topic: msg.Topic,
+			NbOutputs: 1,
+		},
+	}
+}
+
 func (pmc *ProducingMessageConsumer) addTimer(timer *time.Timer, topic string, part int32, off int64) {
 	p, ok := pmc.timers[topic]
 	if !ok {
@@ -232,9 +245,8 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 		}
 
 		if handMsg.Metas.Retry == handMsg.Metas.MaxRetry {
-			// Todo: dead letter
-			log.Println("Putting in dead letter: no more retry")
-			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
+			log.Println("Publishing in dead letter: max retry reached")
+			pmc.publishDeadLetter(msg)
 			return
 		}
 
@@ -255,7 +267,6 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 
 		retryTopic := topicsByRetry[handMsg.Metas.Retry]
 		log.Printf("Publish on retry queue: %s", retryTopic)
-		// Todo: put in retry queue or dead letter if all retries done
 		prodMetas.NbOutputs = 1
 		pmc.producer.Input() <- &sarama.ProducerMessage{
 			Topic: retryTopic,
