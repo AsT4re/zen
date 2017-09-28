@@ -1,7 +1,7 @@
 package main
 
 import(
-	pmc "astare/zen/ProducingMessageConsumer"
+	pmc "astare/zen/producingmessageconsumer"
 	"flag"
 	"log"
 )

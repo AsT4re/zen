@@ -3,7 +3,7 @@ package main
 import (
 	dgclient "astare/zen/dgclient"
 	objects  "astare/zen/objects"
-	pmc      "astare/zen/ProducingMessageConsumer"
+	pmc      "astare/zen/producingmessageconsumer"
 	proto    "github.com/golang/protobuf/proto"
 	errors   "github.com/pkg/errors"
 )

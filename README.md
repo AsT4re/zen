@@ -43,10 +43,10 @@ https://dgraph.io/
 
 * Generate proto files
   ```
-  cd ../ProducingMessageConsumer
+  cd ../producingmessageconsumer
   protoc --go_out=$GOPATH/src *.proto
   cd ../objects
-  protoc --go_out=. *.proto --proto_path=../ProducingMessageConsumer --proto_path=.
+  protoc --go_out=. *.proto --proto_path=../producingmessageconsumer --proto_path=.
   ```
 
 * Publish user id + location pairs
