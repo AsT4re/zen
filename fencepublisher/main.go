@@ -13,6 +13,7 @@ var (
 	dgHost = flag.String("dg-host-and-port", "127.0.0.1:9080", "Dgraph database hostname and port")
 	groupId = flag.String("group-id", "user-loc", "Group id for consumer cluster")
 	maxRetry = flag.Uint("max-retry", 6, "Retry value if processing message have failed")
+	msgsLimit = flag.Int("msgs-limit", 0, "Max number of concurrent messages to process. Default is unlimited")
 )
 
 func main() {
@@ -38,7 +39,8 @@ func main() {
 		                                                       *topicUserLoc,
 		                                                       *topicUserFence,
 		                                                       msgHandler,
-		                                                       uint32(*maxRetry))
+		                                                       uint32(*maxRetry),
+	                                                         *msgsLimit)
 
 	if err != nil {
 		log.Fatalln(err)

@@ -24,6 +24,9 @@ type ProducingMessageConsumer struct {
 	wgMsgHand  sync.WaitGroup
 	timers     map[string]map[int32]map[int64]*time.Timer
 	timersMux  sync.Mutex
+	cond       *sync.Cond
+	msgs       int
+	msgsLimit  int
 }
 
 type inputMetadatas struct {
@@ -54,7 +57,8 @@ func NewProducingMessageConsumer(brokers     []string,
 	                               consTopic   string,
 	                               prodTopic   string,
 	                               msgHand     MessageHandler,
-	                               maxRetry    uint32) (*ProducingMessageConsumer, error) {
+	                               maxRetry    uint32,
+                                 msgsLimit   int) (*ProducingMessageConsumer, error) {
 	if int(maxRetry) >  lenLatencies {
 		return nil, errors.Errorf("max retries must be <= %d", lenLatencies)
 	}
@@ -71,6 +75,8 @@ func NewProducingMessageConsumer(brokers     []string,
 		consTopic: consTopic,
 		msgHand: msgHand,
 		timers: make(map[string]map[int32]map[int64]*time.Timer),
+		msgsLimit: msgsLimit,
+		cond: sync.NewCond(&sync.Mutex{}),
 	}
 
 	var err error
@@ -105,6 +111,14 @@ ConsumerLoop:
 	for {
     select {
     case msg := <-pmc.consumer.Messages():
+			if pmc.msgsLimit > 0 {
+				pmc.cond.L.Lock()
+				if pmc.msgs == pmc.msgsLimit {
+					pmc.cond.Wait()
+				}
+				pmc.msgs++
+				pmc.cond.L.Unlock()
+			}
 			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
 			handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
 			if err != nil {
@@ -185,7 +199,15 @@ func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessa
 }
 
 func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage, handMsg *Message) {
-	defer pmc.wgMsgHand.Done()
+	defer func() {
+		pmc.wgMsgHand.Done()
+		if pmc.msgsLimit > 0 {
+			pmc.cond.L.Lock()
+			pmc.msgs--
+			pmc.cond.L.Unlock()
+			pmc.cond.Signal()
+		}
+	}()
 	prodMetas := &inputMetadatas{
 		Offset: msg.Offset,
 		Partition: msg.Partition,
