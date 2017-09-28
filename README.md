@@ -19,7 +19,7 @@ https://dgraph.io/
 
 # Requirements #
 
-* Protobuf compiler
+* Protobuf compiler (protoc 3.3.0 min)
 * Kafka:
   ```
   docker pull spotify/kafka
@@ -44,7 +44,7 @@ https://dgraph.io/
 * Generate proto files
   ```
   cd ../ProducingMessageConsumer
-  protoc --go_out=. *.proto
+  protoc --go_out=$GOPATH/src *.proto
   cd ../objects
   protoc --go_out=. *.proto --proto_path=../ProducingMessageConsumer --proto_path=.
   ```
