@@ -49,31 +49,6 @@ var latencies = [lenLatencies]time.Duration {
 
 var topicsByRetry [lenLatencies]string
 
-func getRetryTopicNames(topName string) []string {
-	var topics []string
-
-	m := make(map[time.Duration][]int)
-	for i, lat := range latencies {
-		m[lat] = append(m[lat], i)
-	}
-
-	for key, val := range m {
-		var valStr string
-		if key < time.Second {
-			valStr = strconv.FormatFloat(float64(key) / float64(time.Second), 'f', -1, 64)
-		} else {
-			valStr = strconv.FormatInt(int64(key / time.Second), 10)
-		}
-		name := topName + "-" + valStr
-		topics = append(topics, name)
-		for _, ind := range val {
-			topicsByRetry[ind] = name
-		}
-	}
-
-	return topics
-}
-
 func NewProducingMessageConsumer(brokers     []string,
 	                               consGroupId string,
 	                               consTopic   string,
@@ -156,7 +131,7 @@ ConsumerLoop:
 				}
 				pmc.timersMux.Lock()
 				timer := time.AfterFunc(time.Until(sched), f(msg))
-				pmc.addTimer(timer, msg.Topic, msg.Partition, msg.Offset)
+				addTimer(pmc.timers, timer, msg.Topic, msg.Partition, msg.Offset)
 				pmc.timersMux.Unlock()
 			} else {
 				pmc.wgMsgHand.Add(1)
@@ -183,7 +158,7 @@ func (pmc *ProducingMessageConsumer) Close() {
 		}
 	}
 	pmc.timersMux.Unlock()
-	log.Printf("Nb stopped routines: %d\n", nbStopped)
+	log.Printf("Nb stopped sleeping routines: %d\n", nbStopped)
 	log.Printf("Finish processing already handled messages...\n")
 	pmc.wgMsgHand.Wait()
 	pmc.producer.AsyncClose()
@@ -207,22 +182,6 @@ func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessa
 			NbOutputs: 1,
 		},
 	}
-}
-
-func (pmc *ProducingMessageConsumer) addTimer(timer *time.Timer, topic string, part int32, off int64) {
-	p, ok := pmc.timers[topic]
-	if !ok {
-		p = make(map[int32]map[int64]*time.Timer)
-		pmc.timers[topic] = p
-	}
-
-	var o map[int64]*time.Timer
-	o, ok = p[part]
-	if !ok {
-		o = make(map[int64]*time.Timer)
-		p[part] = o
-	}
-	o[off] = timer
 }
 
 func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage, handMsg *Message) {
@@ -350,4 +309,47 @@ func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
 			}
 		}
 	}
+}
+
+// Helpers
+
+func addTimer(t map[string]map[int32]map[int64]*time.Timer, timer *time.Timer, topic string, part int32, off int64) {
+	p, ok := t[topic]
+	if !ok {
+		p = make(map[int32]map[int64]*time.Timer)
+		t[topic] = p
+	}
+
+	var o map[int64]*time.Timer
+	o, ok = p[part]
+	if !ok {
+		o = make(map[int64]*time.Timer)
+		p[part] = o
+	}
+	o[off] = timer
+}
+
+func getRetryTopicNames(topName string) []string {
+	var topics []string
+
+	m := make(map[time.Duration][]int)
+	for i, lat := range latencies {
+		m[lat] = append(m[lat], i)
+	}
+
+	for key, val := range m {
+		var valStr string
+		if key < time.Second {
+			valStr = strconv.FormatFloat(float64(key) / float64(time.Second), 'f', -1, 64)
+		} else {
+			valStr = strconv.FormatInt(int64(key / time.Second), 10)
+		}
+		name := topName + "-" + valStr
+		topics = append(topics, name)
+		for _, ind := range val {
+			topicsByRetry[ind] = name
+		}
+	}
+
+	return topics
 }
