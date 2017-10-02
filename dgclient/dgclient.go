@@ -99,13 +99,13 @@ func (dgCl *DGClient) AddNewNodeToBatch(name, loc string, created_at time.Time) 
 	}
 
 	if err = addEdge(dgCl, &mnode, "loc", loc); err != nil {
-		return err
+		return errors.Wrap(err, "error when adding node to batch")
 	}
 	if err = addEdge(dgCl, &mnode, "name", name); err != nil {
-		return err
+		return errors.Wrap(err, "error when adding node to batch")
 	}
 	if err = addEdge(dgCl, &mnode, "created_at", created_at); err != nil {
-		return err
+		return errors.Wrap(err, "error when adding node to batch")
 	}
 
 	return nil
@@ -134,7 +134,7 @@ func (dgCl *DGClient) GetFencesContainingPos(long, lat float64) (FencesRep, erro
 
 	var fences FencesRep
 	err := sendRequest(dgCl, &getFencesTempl, &reqMap, &fences)
-	return fences, err
+	return fences, errors.Wrap(err, "error when sending request to dgraph")
 }
 
 /*
