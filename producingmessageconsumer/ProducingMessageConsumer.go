@@ -291,21 +291,6 @@ func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
 				break
 			}
 			inMetas = msg.Metadata.(*inputMetadatas)
-		case err, ok = <-errChan:
-			if !ok {
-				errChan = nil
-				break
-			}
-			inMetas = err.Msg.Metadata.(*inputMetadatas)
-			log.Printf("Producing output error (Input:'%s'p:'%d'o:'%d')\n",
-				         inMetas.Topic, inMetas.Partition, inMetas.Offset)
-		}
-
-		if successesChan == nil && errChan == nil {
-			break
-		}
-
-		if ok {
 			p, ok := offRem[inMetas.Topic]
 			if !ok {
 				p = make(map[int32]map[int64]int)
@@ -329,6 +314,20 @@ func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
 			} else {
 				o[inMetas.Offset] = v - 1
 			}
+		case err, ok = <-errChan:
+			if !ok {
+				errChan = nil
+				break
+			}
+			// On sarama producer side, retries have been made, so there is a
+			// a good chance that the issue comes from kafka and in that case
+			// it's better to stop the program in order to avoid other errors
+			log.Panicf("Publishing message (t: %s, p: %d, o: %d) error: %v\n",
+				          err.Msg.Topic, err.Msg.Partition, err.Msg.Offset, err)
+		}
+
+		if successesChan == nil && errChan == nil {
+			break
 		}
 	}
 }
