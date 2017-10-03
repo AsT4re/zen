@@ -204,8 +204,8 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 		if pmc.msgsLimit > 0 {
 			pmc.cond.L.Lock()
 			pmc.msgs--
-			pmc.cond.L.Unlock()
 			pmc.cond.Signal()
+			pmc.cond.L.Unlock()
 		}
 	}()
 	prodMetas := &inputMetadatas{
