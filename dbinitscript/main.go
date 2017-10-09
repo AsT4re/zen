@@ -56,7 +56,7 @@ func run() error {
 	}
 
 	// Init connection to DGraph
-	dgcl, err := dgclient.NewDGClient(*dgHost, *dgNbConns)
+	dgcl, err := dgclient.NewDGClient(*dgHost, *dgNbConns, nil)
 	if err != nil {
 		return err
 	}

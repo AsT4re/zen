@@ -2,8 +2,11 @@ package main
 
 import(
 	pmc "astare/zen/producingmessageconsumer"
+	rec "astare/zen/latencyrecorder"
 	"flag"
 	"log"
+	"fmt"
+	"os"
 )
 
 var (
@@ -14,6 +17,8 @@ var (
 	groupId = flag.String("group-id", "user-loc", "Group id for consumer cluster")
 	maxRetry = flag.Uint("max-retry", 6, "Retry value if processing message have failed")
 	msgsLimit = flag.Int("msgs-limit", 0, "Max number of concurrent messages to process. Default is unlimited")
+	dgAnalysis = flag.Bool("dg-analysis", false, "Dgraph request latency analysis")
+	msgAnalysis = flag.Bool("msg-analysis", false, "Latency analysis for processing one message")
 )
 
 func main() {
@@ -27,26 +32,41 @@ func main() {
 		log.Fatalln("missing mandatory flag 'topic-user-fence'")
 	}
 
-	msgHandler, err := NewUserLocationHandler(*dgNbConns, *dgHost)
+	dgLr := rec.NewLatencyRecorder(*dgAnalysis)
+	msgHandler, err := NewUserLocationHandler(*dgNbConns, *dgHost, dgLr)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
 	defer msgHandler.Close()
 
+	msgLr := rec.NewLatencyRecorder(*msgAnalysis)
 	producingMsgCons, err := pmc.NewProducingMessageConsumer([]string{"localhost:9092"},
 		                                                       *groupId,
 		                                                       *topicUserLoc,
 		                                                       *topicUserFence,
 		                                                       msgHandler,
 		                                                       uint32(*maxRetry),
-	                                                         *msgsLimit)
+		                                                       *msgsLimit,
+		                                                       msgLr)
 
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	defer producingMsgCons.Close()
 	producingMsgCons.Consume()
+	producingMsgCons.Close()
+
+	if *dgAnalysis || *msgAnalysis {
+		f, err := os.OpenFile("analysis", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Println("Error creating file: %v\n", err)
+			return
+		}
+		defer f.Close()
+
+		dgLr.DumpFullAnalysis(f, fmt.Sprintf("DGraph (parallel reqs: %d): \n", *msgsLimit))
+		msgLr.DumpFullAnalysis(f, fmt.Sprintf("Msg (parallel process: %d): \n", *msgsLimit))
+	}
 }
 

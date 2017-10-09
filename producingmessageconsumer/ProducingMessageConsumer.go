@@ -4,6 +4,7 @@ import(
 	sarama   "github.com/Shopify/sarama"
 	cluster  "github.com/bsm/sarama-cluster"
 	errors   "github.com/pkg/errors"
+	rec      "astare/zen/latencyrecorder"
 	"os"
 	"os/signal"
 	"log"
@@ -27,6 +28,7 @@ type ProducingMessageConsumer struct {
 	cond       *sync.Cond
 	msgs       int
 	msgsLimit  int
+	lr         *rec.LatencyRecorder
 }
 
 type inputMetadatas struct {
@@ -58,7 +60,8 @@ func NewProducingMessageConsumer(brokers     []string,
 	                               prodTopic   string,
 	                               msgHand     MessageHandler,
 	                               maxRetry    uint32,
-                                 msgsLimit   int) (*ProducingMessageConsumer, error) {
+	                               msgsLimit   int,
+                                 lr          *rec.LatencyRecorder) (*ProducingMessageConsumer, error) {
 	if int(maxRetry) >  lenLatencies {
 		return nil, errors.Errorf("max retries must be <= %d", lenLatencies)
 	}
@@ -77,7 +80,14 @@ func NewProducingMessageConsumer(brokers     []string,
 		timers: make(map[string]map[int32]map[int64]*time.Timer),
 		msgsLimit: msgsLimit,
 		cond: sync.NewCond(&sync.Mutex{}),
+		lr: lr,
 	}
+
+	if lr == nil {
+		pmc.lr = rec.NewLatencyRecorder(false)
+	}
+
+	pmc.lr.SetCollectionSpecs("Fences found:", "")
 
 	var err error
 	topics := append(getRetryTopicNames(consTopic), consTopic)
@@ -120,12 +130,14 @@ ConsumerLoop:
 				pmc.cond.L.Unlock()
 			}
 			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
+			before := pmc.lr.Now()
 			handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
 			if err != nil {
 				log.Printf("Publishing in dead letter: unable to Unmarshal message: %v\n", err)
 				pmc.publishDeadLetter(msg)
 				continue ConsumerLoop
 			}
+			elapsed := pmc.lr.SinceTime(before)
 
 			if handMsg.Metas != nil {
 				var sched time.Time
@@ -135,21 +147,21 @@ ConsumerLoop:
 					continue ConsumerLoop
 				}
 				pmc.wgMsgHand.Add(1)
-				f := func(msg *sarama.ConsumerMessage) func() {
+				f := func(msg *sarama.ConsumerMessage, elapsed time.Duration) func() {
 					return func() {
-						pmc.processMessage(msg, handMsg)
+						pmc.processMessage(msg, handMsg, elapsed)
 						pmc.timersMux.Lock()
 						delete(pmc.timers[msg.Topic][msg.Partition], msg.Offset)
 						pmc.timersMux.Unlock()
 					}
 				}
 				pmc.timersMux.Lock()
-				timer := time.AfterFunc(time.Until(sched), f(msg))
+				timer := time.AfterFunc(time.Until(sched), f(msg, elapsed))
 				addTimer(pmc.timers, timer, msg.Topic, msg.Partition, msg.Offset)
 				pmc.timersMux.Unlock()
 			} else {
 				pmc.wgMsgHand.Add(1)
-				go pmc.processMessage(msg, handMsg)
+				go pmc.processMessage(msg, handMsg, elapsed)
 			}
     case <-signals:
 			break ConsumerLoop
@@ -198,7 +210,7 @@ func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessa
 	}
 }
 
-func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage, handMsg *Message) {
+func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage, handMsg *Message, elapsed time.Duration) {
 	defer func() {
 		pmc.wgMsgHand.Done()
 		if pmc.msgsLimit > 0 {
@@ -213,6 +225,7 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 		Partition: msg.Partition,
 		Topic: msg.Topic,
 	}
+	before := pmc.lr.Now()
 	outputs, err := pmc.msgHand.Process(handMsg.Value)
 	if err != nil {
 		log.Printf("Processing message failed: %v\n", err)
@@ -257,6 +270,7 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 	} else {
 		// Produce outputs
 		nbOutputs := len(outputs)
+		pmc.lr.AddToCollection(float64(nbOutputs))
 		//log.Printf("NbFences = %d (Input:'%s'p:'%d'o:'%d')\n", nbOutputs, msg.Topic, msg.Partition, msg.Offset)
 		if nbOutputs == 0 {
 			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
@@ -271,6 +285,7 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 				Metadata: prodMetas,
 			}
 		}
+		pmc.lr.AddLatency(pmc.lr.SinceTime(before) + elapsed)
 	}
 }
 

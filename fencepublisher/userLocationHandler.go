@@ -4,6 +4,7 @@ import (
 	dgclient "astare/zen/dgclient"
 	objects  "astare/zen/objects"
 	pmc      "astare/zen/producingmessageconsumer"
+	rec      "astare/zen/latencyrecorder"
 	proto    "github.com/golang/protobuf/proto"
 	errors   "github.com/pkg/errors"
 )
@@ -12,12 +13,12 @@ type userLocationHandler struct {
 	dgCl *dgclient.DGClient
 }
 
-func NewUserLocationHandler(dgNbConns uint, dgHost string) (*userLocationHandler, error) {
+func NewUserLocationHandler(dgNbConns uint, dgHost string, lr *rec.LatencyRecorder) (*userLocationHandler, error) {
 
 	handler := new(userLocationHandler)
 	// Create client + init connection
 	var err error
-	handler.dgCl, err = dgclient.NewDGClient(dgHost, dgNbConns)
+	handler.dgCl, err = dgclient.NewDGClient(dgHost, dgNbConns, lr)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package dgclient
 
 import (
+	rec    "astare/zen/latencyrecorder"
 	"bytes"
 	"strconv"
 	"context"
@@ -21,6 +22,7 @@ type DGClient struct {
 	conns     []*grpc.ClientConn
 	clientDir string
 	dg        *client.Dgraph
+	lr        *rec.LatencyRecorder
 }
 
 type FenceProps struct {
@@ -32,9 +34,15 @@ type FencesRep struct {
 	Root        []*FenceProps `dgraph:"fences"`
 }
 
-func NewDGClient(host string, nbConns uint) (*DGClient, error) {
+func NewDGClient(host string, nbConns uint, lr *rec.LatencyRecorder) (*DGClient, error) {
 	// Init connection to DGraph
-	dgCl := new(DGClient)
+	dgCl := &DGClient{
+		lr: lr,
+	}
+
+	if lr == nil {
+		dgCl.lr = rec.NewLatencyRecorder(false)
+	}
 
 	var err error
 	if dgCl.clientDir, err = ioutil.TempDir("", "client_"); err != nil {
@@ -176,10 +184,14 @@ func sendRequest(dgCl *DGClient, reqStr *string, reqMap *map[string]string, rep 
 	req := client.Req{}
 	req.SetQueryWithVariables(*reqStr, *reqMap)
 
+
+	before := dgCl.lr.Now()
 	resp, err := dgCl.dg.Run(context.Background(), &req)
+	elapsed := dgCl.lr.SinceTime(before)
 	if err != nil {
 		return errors.Wrap(err, "error when executing request")
 	}
+	dgCl.lr.AddLatency(elapsed)
 
 	if len(resp.N[0].Children) == 0 {
 		return nil
