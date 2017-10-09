@@ -26,12 +26,12 @@ type DGClient struct {
 }
 
 type FenceProps struct {
-	Name        string        `dgraph:"name"`
+	Name        string        `json:"name"`
 }
 
 // Reply structure from GetFencesContainingPos request
 type FencesRep struct {
-	Root        []*FenceProps `dgraph:"fences"`
+	Root        []*FenceProps `json:"fences"`
 }
 
 func NewDGClient(host []string, nbConns uint, lr *rec.LatencyRecorder) (*DGClient, error) {
