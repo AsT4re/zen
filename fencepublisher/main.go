@@ -36,13 +36,13 @@ func (i *arrStrFlags) Set(value string) error {
 var (
 	topicUserLoc = flag.String("topic-user-loc", "", "Topic where to consume UserLocation messages")
 	topicUserFence = flag.String("topic-user-fence", "", "Topic where to produce UserFence messages")
-	dgNbConns = flag.Uint("dg-conns-pool", 10, "Number of connections to DGraph")
 	dgHost arrStrFlags
+	dgNbConns = flag.Uint("dg-conns-pool", 1000, "Number of connections to DGraph")
 	groupId = flag.String("group-id", "user-loc", "Group id for consumer cluster")
 	maxRetry = flag.Uint("max-retry", 6, "Retry value if processing message have failed")
-	msgsLimit = flag.Int("msgs-limit", 0, "Max number of concurrent messages to process. Default is unlimited")
 	dgAnalysis = flag.Bool("dg-analysis", false, "Dgraph request latency analysis")
 	msgAnalysis = flag.Bool("msg-analysis", false, "Latency analysis for processing one message")
+	msgsLimit = flag.Int("msgs-limit", 1000, "Max number of concurrent messages to process")
 	nbtotal = flag.Int("nb-total", 0, "Total number of messages to consume before ending consuming")
 )
 
