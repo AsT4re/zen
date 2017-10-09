@@ -1,12 +1,12 @@
 package dgclient
 
 import (
+	client "github.com/dgraph-io/dgraph/client"
+	errors "github.com/pkg/errors"
 	rec    "astare/zen/latencyrecorder"
 	"bytes"
 	"strconv"
 	"context"
-	"github.com/dgraph-io/dgraph/client"
-	"github.com/pkg/errors"
 	"fmt"
 	"google.golang.org/grpc"
 	"io/ioutil"
