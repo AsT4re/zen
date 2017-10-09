@@ -28,6 +28,8 @@ type ProducingMessageConsumer struct {
 	cond       *sync.Cond
 	msgs       int
 	msgsLimit  int
+	nbtotal    int
+	procmsgs   int
 	lr         *rec.LatencyRecorder
 }
 
@@ -61,6 +63,7 @@ func NewProducingMessageConsumer(brokers     []string,
 	                               msgHand     MessageHandler,
 	                               maxRetry    uint32,
 	                               msgsLimit   int,
+	                               nbtotal     int,
                                  lr          *rec.LatencyRecorder) (*ProducingMessageConsumer, error) {
 	if int(maxRetry) >  lenLatencies {
 		return nil, errors.Errorf("max retries must be <= %d", lenLatencies)
@@ -80,6 +83,7 @@ func NewProducingMessageConsumer(brokers     []string,
 		timers: make(map[string]map[int32]map[int64]*time.Timer),
 		msgsLimit: msgsLimit,
 		cond: sync.NewCond(&sync.Mutex{}),
+		nbtotal: nbtotal,
 		lr: lr,
 	}
 
@@ -166,6 +170,14 @@ ConsumerLoop:
     case <-signals:
 			break ConsumerLoop
     }
+
+		if pmc.nbtotal > 0 {
+			pmc.procmsgs++
+			if pmc.procmsgs == pmc.nbtotal {
+				log.Println("Limit of message to consume reached")
+				break ConsumerLoop
+			}
+		}
 	}
 }
 

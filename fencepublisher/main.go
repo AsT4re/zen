@@ -19,6 +19,7 @@ var (
 	msgsLimit = flag.Int("msgs-limit", 0, "Max number of concurrent messages to process. Default is unlimited")
 	dgAnalysis = flag.Bool("dg-analysis", false, "Dgraph request latency analysis")
 	msgAnalysis = flag.Bool("msg-analysis", false, "Latency analysis for processing one message")
+	nbtotal = flag.Int("nb-total", 0, "Total number of messages to consume before ending consuming")
 )
 
 func main() {
@@ -48,6 +49,7 @@ func main() {
 		                                                       msgHandler,
 		                                                       uint32(*maxRetry),
 		                                                       *msgsLimit,
+		                                                       *nbtotal,
 		                                                       msgLr)
 
 	if err != nil {
