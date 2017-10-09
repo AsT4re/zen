@@ -34,8 +34,13 @@ type FencesRep struct {
 	Root        []*FenceProps `dgraph:"fences"`
 }
 
-func NewDGClient(host string, nbConns uint, lr *rec.LatencyRecorder) (*DGClient, error) {
+func NewDGClient(host []string, nbConns uint, lr *rec.LatencyRecorder) (*DGClient, error) {
 	// Init connection to DGraph
+	lenHosts := len(host)
+	if lenHosts == 0 || nbConns == 0 {
+		return nil, errors.New("At least 1 host and 1 connection is needed")
+	}
+
 	dgCl := &DGClient{
 		lr: lr,
 	}
@@ -51,7 +56,7 @@ func NewDGClient(host string, nbConns uint, lr *rec.LatencyRecorder) (*DGClient,
 
 	grpcConns := make([]*grpc.ClientConn, nbConns)
 	for i := 0; uint(i) < nbConns; i++ {
-		if conn, err := grpc.Dial(host, grpc.WithInsecure()); err != nil {
+		if conn, err := grpc.Dial(host[i % lenHosts], grpc.WithInsecure()); err != nil {
 			return nil, errors.Wrap(err, "error dialing grpc connection")
 		} else {
 			grpcConns[i] = conn

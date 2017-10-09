@@ -13,8 +13,7 @@ type userLocationHandler struct {
 	dgCl *dgclient.DGClient
 }
 
-func NewUserLocationHandler(dgNbConns uint, dgHost string, lr *rec.LatencyRecorder) (*userLocationHandler, error) {
-
+func NewUserLocationHandler(dgNbConns uint, dgHost []string, lr *rec.LatencyRecorder) (*userLocationHandler, error) {
 	handler := new(userLocationHandler)
 	// Create client + init connection
 	var err error

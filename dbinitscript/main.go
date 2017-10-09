@@ -14,14 +14,37 @@ import (
 	"time"
 )
 
+type arrStrFlags []string
+
+func (i *arrStrFlags) String() string {
+	var buffer bytes.Buffer
+
+	first := true
+	for _, s := range *i {
+		if first == false {
+			buffer.WriteString(",")
+		} else {
+			first = false
+		}
+		buffer.WriteString(s)
+	}
+
+	return buffer.String()
+}
+
+func (i *arrStrFlags) Set(value string) error {
+    *i = append(*i, value)
+    return nil
+}
+
 var (
 	nbFences = flag.Uint("nb-fences", 10000, "Number of geo fences to create and add in DB")
 	outFile = flag.String("out-file", "", "Optional file name to dump geo fence coordinates added in DB")
 	longDelta = flag.Float64("long-delta", 0.9, "Longitude variations east and west for random positions in that zone")
 	latDelta = flag.Float64("lat-delta", 0.425, "Latitude variations south and north for random positions in that zone")
 	maxLines = flag.Int("max-lines", 4, "Max number of lines for a geo fence, must be >= 3")
-	dgHost = flag.String("dg-host-and-port", "127.0.0.1:9080", "Dgraph database hostname and port")
 	dgNbConns = flag.Uint("dg-conns-pool", 100, "Number of connections to DGraph")
+	dgHost arrStrFlags
 	seed = flag.Int64("seed", 0, "Seed for generation of random fences, use same seed for same sequence")
 )
 
@@ -40,7 +63,13 @@ func main() {
 
 
 func run() error {
+	flag.Var(&dgHost, "dg-host-and-port", "Dgraph database hostname and port")
 	flag.Parse()
+
+	if len(dgHost) == 0 {
+		dgHost = append(dgHost, "127.0.0.1:9080")
+	}
+
 	if *maxLines < 3 {
 		return errors.New("maxLines need to be at least 3 for getting a valid geo fence")
 	}
@@ -56,7 +85,7 @@ func run() error {
 	}
 
 	// Init connection to DGraph
-	dgcl, err := dgclient.NewDGClient(*dgHost, *dgNbConns, nil)
+	dgcl, err := dgclient.NewDGClient(dgHost, *dgNbConns, nil)
 	if err != nil {
 		return err
 	}

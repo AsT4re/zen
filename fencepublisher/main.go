@@ -7,13 +7,37 @@ import(
 	"log"
 	"fmt"
 	"os"
+	"bytes"
 )
+
+type arrStrFlags []string
+
+func (i *arrStrFlags) String() string {
+	var buffer bytes.Buffer
+
+	first := true
+	for _, s := range *i {
+		if first == false {
+			buffer.WriteString(",")
+		} else {
+			first = false
+		}
+		buffer.WriteString(s)
+	}
+
+	return buffer.String()
+}
+
+func (i *arrStrFlags) Set(value string) error {
+    *i = append(*i, value)
+    return nil
+}
 
 var (
 	topicUserLoc = flag.String("topic-user-loc", "", "Topic where to consume UserLocation messages")
 	topicUserFence = flag.String("topic-user-fence", "", "Topic where to produce UserFence messages")
 	dgNbConns = flag.Uint("dg-conns-pool", 10, "Number of connections to DGraph")
-	dgHost = flag.String("dg-host-and-port", "127.0.0.1:9080", "Dgraph database hostname and port")
+	dgHost arrStrFlags
 	groupId = flag.String("group-id", "user-loc", "Group id for consumer cluster")
 	maxRetry = flag.Uint("max-retry", 6, "Retry value if processing message have failed")
 	msgsLimit = flag.Int("msgs-limit", 0, "Max number of concurrent messages to process. Default is unlimited")
@@ -23,7 +47,12 @@ var (
 )
 
 func main() {
+	flag.Var(&dgHost, "dg-host-and-port", "Dgraph database hostname and port")
 	flag.Parse()
+
+	if len(dgHost) == 0 {
+		dgHost = append(dgHost, "127.0.0.1:9080")
+	}
 
 	if *topicUserLoc == "" {
 		log.Fatalln("missing mandatory flag 'topic-user-loc'")
@@ -34,7 +63,7 @@ func main() {
 	}
 
 	dgLr := rec.NewLatencyRecorder(*dgAnalysis)
-	msgHandler, err := NewUserLocationHandler(*dgNbConns, *dgHost, dgLr)
+	msgHandler, err := NewUserLocationHandler(*dgNbConns, dgHost, dgLr)
 	if err != nil {
 		log.Fatalln(err)
 	}
