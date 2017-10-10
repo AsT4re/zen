@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 package pmc;
-option go_package = "astare/zen/producingmessageconsumer;pmc";
+option go_package = "astare/zen/libs/producingmessageconsumer;pmc";
 
 message MessageMetadatas {
   bytes schedule = 1;

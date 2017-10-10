@@ -3,7 +3,7 @@ package dgclient
 import (
 	client "github.com/dgraph-io/dgraph/client"
 	errors "github.com/pkg/errors"
-	rec    "astare/zen/latencyrecorder"
+	rec    "astare/zen/libs/latencyrecorder"
 	"bytes"
 	"strconv"
 	"context"

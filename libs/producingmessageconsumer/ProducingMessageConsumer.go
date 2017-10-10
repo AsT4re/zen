@@ -4,7 +4,7 @@ import(
 	sarama   "github.com/Shopify/sarama"
 	cluster  "github.com/bsm/sarama-cluster"
 	errors   "github.com/pkg/errors"
-	rec      "astare/zen/latencyrecorder"
+	rec      "astare/zen/libs/latencyrecorder"
 	"os"
 	"os/signal"
 	"log"
