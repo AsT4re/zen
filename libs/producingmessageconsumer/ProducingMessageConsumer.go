@@ -27,9 +27,6 @@ type ProducingMessageConsumer struct {
 	timersMux  sync.Mutex
 	cond       *sync.Cond
 	msgs       int
-	msgsLimit  int
-	nbtotal    int
-	procmsgs   int
 	lr         *rec.LatencyRecorder
 }
 
@@ -62,8 +59,6 @@ func NewProducingMessageConsumer(brokers     []string,
 	                               prodTopic   string,
 	                               msgHand     MessageHandler,
 	                               maxRetry    uint32,
-	                               msgsLimit   int,
-	                               nbtotal     int,
                                  lr          *rec.LatencyRecorder) (*ProducingMessageConsumer, error) {
 	if int(maxRetry) >  lenLatencies {
 		return nil, errors.Errorf("max retries must be <= %d", lenLatencies)
@@ -81,9 +76,7 @@ func NewProducingMessageConsumer(brokers     []string,
 		consTopic: consTopic,
 		msgHand: msgHand,
 		timers: make(map[string]map[int32]map[int64]*time.Timer),
-		msgsLimit: msgsLimit,
 		cond: sync.NewCond(&sync.Mutex{}),
-		nbtotal: nbtotal,
 		lr: lr,
 	}
 
@@ -118,16 +111,17 @@ func NewProducingMessageConsumer(brokers     []string,
 	return pmc, nil
 }
 
-func (pmc *ProducingMessageConsumer) Consume() {
+func (pmc *ProducingMessageConsumer) Consume(nbtotal int, msgsLimit int) {
+	var procmsgs int
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt)
 ConsumerLoop:
 	for {
     select {
     case msg := <-pmc.consumer.Messages():
-			if pmc.msgsLimit > 0 {
+			if msgsLimit > 0 {
 				pmc.cond.L.Lock()
-				if pmc.msgs == pmc.msgsLimit {
+				if pmc.msgs == msgsLimit {
 					pmc.cond.Wait()
 				}
 				pmc.msgs++
@@ -153,7 +147,7 @@ ConsumerLoop:
 				pmc.wgMsgHand.Add(1)
 				f := func(msg *sarama.ConsumerMessage, elapsed time.Duration) func() {
 					return func() {
-						pmc.processMessage(msg, handMsg, elapsed)
+						pmc.processMessage(msg, handMsg, elapsed, msgsLimit)
 						pmc.timersMux.Lock()
 						delete(pmc.timers[msg.Topic][msg.Partition], msg.Offset)
 						pmc.timersMux.Unlock()
@@ -165,40 +159,41 @@ ConsumerLoop:
 				pmc.timersMux.Unlock()
 			} else {
 				pmc.wgMsgHand.Add(1)
-				go pmc.processMessage(msg, handMsg, elapsed)
+				go pmc.processMessage(msg, handMsg, elapsed, msgsLimit)
 			}
     case <-signals:
 			break ConsumerLoop
     }
 
-		if pmc.nbtotal > 0 {
-			pmc.procmsgs++
-			if pmc.procmsgs == pmc.nbtotal {
-				log.Println("Limit of message to consume reached")
+		if nbtotal > 0 {
+			procmsgs++
+			if procmsgs == nbtotal {
 				break ConsumerLoop
 			}
 		}
 	}
 }
 
-func (pmc *ProducingMessageConsumer) Close() {
-	log.Printf("Stop sleeping routines for retry messages...\n")
-	var nbStopped int
+
+func (pmc *ProducingMessageConsumer) WaitProcessingMessages() {
 	pmc.timersMux.Lock()
 	for _, p := range pmc.timers {
 		for _, o := range p {
 			for _, t := range o {
 				if t.Stop() {
 					pmc.wgMsgHand.Done()
-					nbStopped++
 				}
 			}
 		}
 	}
 	pmc.timersMux.Unlock()
-	log.Printf("Nb stopped sleeping routines: %d\n", nbStopped)
-	log.Printf("Finish processing already handled messages...\n")
 	pmc.wgMsgHand.Wait()
+
+	pmc.msgs = 0
+}
+
+func (pmc *ProducingMessageConsumer) Close() {
+	pmc.WaitProcessingMessages()
 	pmc.producer.AsyncClose()
 	pmc.wgOutAcks.Wait()
 
@@ -222,15 +217,18 @@ func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessa
 	}
 }
 
-func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage, handMsg *Message, elapsed time.Duration) {
+func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
+	                                                  handMsg *Message,
+	                                                  elapsed time.Duration,
+                                                    msgsLimit int) {
 	defer func() {
-		pmc.wgMsgHand.Done()
-		if pmc.msgsLimit > 0 {
+		if msgsLimit > 0 {
 			pmc.cond.L.Lock()
 			pmc.msgs--
 			pmc.cond.Signal()
 			pmc.cond.L.Unlock()
 		}
+		pmc.wgMsgHand.Done()
 	}()
 	prodMetas := &inputMetadatas{
 		Offset: msg.Offset,
@@ -240,7 +238,7 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 	before := pmc.lr.Now()
 	outputs, err := pmc.msgHand.Process(handMsg.Value)
 	if err != nil {
-		log.Printf("Processing message failed: %v\n", err)
+		log.Printf("WARNING: Processing message failed: %v\n", err)
 		if handMsg.Metas != nil {
 			handMsg.Metas.Retry++
 		} else {

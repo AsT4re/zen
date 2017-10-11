@@ -58,6 +58,11 @@ func (lr *LatencyRecorder) AddLatency(lat time.Duration) {
 	}
 }
 
+func (lr *LatencyRecorder) Reset() {
+	lr.coll = nil
+	lr.reqLats = nil
+}
+
 func (lr *LatencyRecorder) DumpFullAnalysis(f *os.File, title string) {
 	if lr.enabled == true {
 		f.WriteString(title + "\n")

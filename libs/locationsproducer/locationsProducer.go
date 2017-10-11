@@ -12,7 +12,7 @@ import(
 	"time"
 )
 
-func ProduceRandomLocations(topic string, nbMsgs uint, seed int64) error {
+func ProduceRandomLocations(topic string, nbMsgs int, seed int64) error {
 	if topic == "" {
 		return errors.New("missing mandatory flag 'topic'")
 	}
@@ -52,7 +52,7 @@ func ProduceRandomLocations(topic string, nbMsgs uint, seed int64) error {
 
 	r := rand.New(rand.NewSource(seed))
 
-	for i := uint(0); i < nbMsgs; i++ {
+	for i := 0; i < nbMsgs; i++ {
     message, err := newUserPosMessage(topic, r)
 		if err != nil {
 			return err

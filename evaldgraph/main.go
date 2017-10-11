@@ -13,6 +13,7 @@ import(
 	"log"
 	"os"
 	"bytes"
+	"time"
 )
 
 type arrStrFlags []string
@@ -43,12 +44,6 @@ var (
 	topicUserFence = flag.String("topic-user-fence", "", "Topic where to produce UserFence messages")
 	dgHost arrStrFlags
 	dgNbConns = flag.Uint("dg-conns-pool", 1000, "Number of connections to DGraph")
-	groupId = flag.String("group-id", "user-loc", "Group id for consumer cluster")
-	maxRetry = flag.Uint("max-retry", 6, "Retry value if processing message have failed")
-	dgAnalysis = flag.Bool("dg-analysis", false, "Dgraph request latency analysis")
-	msgAnalysis = flag.Bool("msg-analysis", false, "Latency analysis for processing one message")
-	msgsLimit = flag.Int("msgs-limit", 1000, "Max number of concurrent messages to process")
-	nbtotal = flag.Int("nb-total", 0, "Total number of messages to consume before ending consuming")
 )
 
 func main() {
@@ -73,11 +68,8 @@ func run() error {
 		dgHost = append(dgHost, "127.0.0.1:9080")
 	}
 
-	if err := lp.ProduceRandomLocations(*topicUserLoc, 10000, 0); err != nil {
-		return err
-	}
-
-	dgLr := rec.NewLatencyRecorder(*dgAnalysis)
+	// Initialize dgClient with latency analyzer
+	dgLr := rec.NewLatencyRecorder(true)
 	dgCl, err := dgclient.NewDGClient(dgHost, *dgNbConns, dgLr)
 	if err != nil {
 		return err
@@ -87,41 +79,74 @@ func run() error {
 	}
 	defer dgCl.Close()
 
-	if err := dbinit.AddRandomFences(dgCl, 100000, nil); err != nil {
-		return err
-	}
-
-	log.Println("Fences added with success !")
-
-	msgLr := rec.NewLatencyRecorder(*msgAnalysis)
+	// Number of messages to process for each call to Consume()
+	nbtotal := 100000
+	// Initialize producing message consumer with latency analyzer
+	msgLr := rec.NewLatencyRecorder(true)
 	producingMsgCons, err := pmc.NewProducingMessageConsumer([]string{"localhost:9092"},
-		                                                       *groupId,
+		                                                       "user-loc",
 		                                                       *topicUserLoc,
 		                                                       *topicUserFence,
 		                                                       &ulh.UserLocationHandler {
 																														 DgCl: dgCl,
 																													 },
-		                                                       uint32(*maxRetry),
-		                                                       *msgsLimit,
-		                                                       *nbtotal,
+		                                                       uint32(0),
 		                                                       msgLr)
 
+	defer producingMsgCons.Close()
+
+	f, err := os.OpenFile("analysis", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "Fail to open file")
 	}
+	defer f.Close()
 
-	producingMsgCons.Consume()
-	producingMsgCons.Close()
+	batchConf := dbinit.DefaultConfig()
+	nbFencesArr := []int{100000, 100000}
+	fenDiv := 10000
+	var nbFencesAcc int
+	msgsLimit := []int{50, 100}
+	rndLocsSeed := int64(1)
 
-	if *dgAnalysis || *msgAnalysis {
-		f, err := os.OpenFile("analysis", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return errors.Wrap(err, "Fail to open file")
+	for i, nbFences := range nbFencesArr {
+		batchConf.Seed++
+		nbFencesAcc += nbFences
+		log.Printf("Adding %d random fences in dgraph...\n", nbFences)
+		if i != 0 {
+			if err := dgCl.ResetClient(); err != nil {
+				return err
+			}
 		}
-		defer f.Close()
+		if err := dbinit.AddRandomFences(dgCl, nbFences, batchConf); err != nil {
+			fmt.Printf("HERE ERROR: %v\n", err)
+			return err
+		}
 
-		dgLr.DumpFullAnalysis(f, fmt.Sprintf("DGraph (parallel reqs: %d): \n", *msgsLimit))
-		msgLr.DumpFullAnalysis(f, fmt.Sprintf("Msg (parallel process: %d): \n", *msgsLimit))
+		timeToWait := nbFences/fenDiv + 5
+		log.Printf("Fences added with success. Waiting %d seconds for data to be replicated...\n", timeToWait)
+		time.Sleep(time.Duration(nbFences/fenDiv + 5) * time.Second)
+
+		for _, limit := range msgsLimit {
+			log.Printf("Adding %d random location messages on %s topic...\n", nbtotal, *topicUserLoc)
+			if err := lp.ProduceRandomLocations(*topicUserLoc, nbtotal, rndLocsSeed); err != nil {
+				return err
+			}
+
+			before := time.Now()
+			producingMsgCons.Consume(nbtotal, limit)
+			producingMsgCons.WaitProcessingMessages()
+			dur := time.Since(before)
+
+			throughput := float64(nbtotal) / dur.Seconds()
+			f.WriteString(fmt.Sprintf("Stats (NbFences: %d. Parallel connections: %d):\n\n", nbFencesAcc, limit))
+			f.WriteString(fmt.Sprintf("Throughput: %f/sec\n\n", throughput))
+			dgLr.DumpFullAnalysis(f, "\nDgraph requests:\n")
+			msgLr.DumpFullAnalysis(f, "\nConsumed messages:\n")
+			f.WriteString("\n")
+
+			dgLr.Reset()
+			msgLr.Reset()
+		}
 	}
 
 	return nil

@@ -68,6 +68,23 @@ func NewDGClient(host []string, nbConns uint, lr *rec.LatencyRecorder) (*DGClien
 	return dgCl, nil
 }
 
+func (dgCl *DGClient) ResetClient() error {
+	if dgCl.clientDir != "" {
+		if err := os.RemoveAll(dgCl.clientDir); err != nil {
+			return errors.Wrap(err, "error removing temporary directory")
+		}
+	}
+
+	var err error
+	if dgCl.clientDir, err = ioutil.TempDir("", "client_"); err != nil {
+		return errors.Wrap(err, "error creating temporary directory")
+	}
+
+	dgCl.dg = client.NewDgraphClient(dgCl.grpcConns, client.DefaultOptions, dgCl.clientDir)
+
+	return nil
+}
+
 // Initialize DB with schema
 func (dgCl *DGClient) Init() error {
 	req := client.Req{}

@@ -29,36 +29,23 @@ https://dgraph.io/
 * DGraph:
   ```
   docker pull dgraph/dgraph
-  docker run -it -p 127.0.0.1:8080:8080 -p 127.0.0.1:9080:9080 -v ~/dgraph:/dgraph --name dgraph dgraph/dgraph dgraph --bindall=true
+  docker run -it -p 8080:8080 -p 9080:9080 -v ~/dgraph:/dgraph --name dgraph dgraph/dgraph:latest dgraphzero -w zw
+  docker exec -it dgraph dgraph --bindall=true --memory_mb 8192 -peer 127.0.0.1:8888
   ```
 
 # Installation #
 
-* Init DB
-  ```
-  cd dbinitscript
-  go build
-  ./dbinitscript --nb-fences=10000 --max-lines=3 --long-delta=7.2 --lat-delta=3.4 --out-file=fences
-  ```
-
 * Generate proto files
   ```
-  cd ../producingmessageconsumer
+  cd libs/producingmessageconsumer
   protoc --go_out=$GOPATH/src *.proto
   cd ../objects
   protoc --go_out=. *.proto --proto_path=../producingmessageconsumer --proto_path=.
   ```
-
-* Publish user id + location pairs
+* Evaluate dgraph for geofencing
   ```
-  cd ../userpospublisher
+  cd ../../evaldgraph
   go build
-  ./userpospublisher --seed=42 --nb-msgs=1000 --topic=userpos
+  ./evaldgraph --topic-user-loc="UserLoc" --topic-user-fence="UserFence" --dg-host-and-port=<ipNodeDgraph>:9080
   ```
-
-* Publish fences
-  ```
-  cd ../fencepublisher
-  go build
-  ./fencepublisher --topic-user-loc=userpos --topic-user-fence=fence
-  ```
+* Open "analysis" file
