@@ -19,7 +19,7 @@ import (
  */
 
 type DGClient struct {
-	conns     []*grpc.ClientConn
+	grpcConns     []*grpc.ClientConn
 	clientDir string
 	dg        *client.Dgraph
 	lr        *rec.LatencyRecorder
@@ -54,16 +54,16 @@ func NewDGClient(host []string, nbConns uint, lr *rec.LatencyRecorder) (*DGClien
 		return nil, errors.Wrap(err, "error creating temporary directory")
 	}
 
-	grpcConns := make([]*grpc.ClientConn, nbConns)
+	dgCl.grpcConns = make([]*grpc.ClientConn, nbConns)
 	for i := 0; uint(i) < nbConns; i++ {
 		if conn, err := grpc.Dial(host[i % lenHosts], grpc.WithInsecure()); err != nil {
 			return nil, errors.Wrap(err, "error dialing grpc connection")
 		} else {
-			grpcConns[i] = conn
+			dgCl.grpcConns[i] = conn
 		}
 	}
 
-	dgCl.dg = client.NewDgraphClient(grpcConns, client.DefaultOptions, dgCl.clientDir)
+	dgCl.dg = client.NewDgraphClient(dgCl.grpcConns, client.DefaultOptions, dgCl.clientDir)
 
 	return dgCl, nil
 }
@@ -89,10 +89,10 @@ func (dgCl *DGClient) Init() error {
 }
 
 func (dgCl *DGClient) Close() {
-	if len(dgCl.conns) > 0 {
-		connsLen := len(dgCl.conns)
+	if len(dgCl.grpcConns) > 0 {
+		connsLen := len(dgCl.grpcConns)
 		for i := 0; i < connsLen; i++ {
-			if err := dgCl.conns[i].Close(); err != nil {
+			if err := dgCl.grpcConns[i].Close(); err != nil {
 				fmt.Fprintf(os.Stderr, "WARNING: %+v\n", errors.Wrap(err, "closing connection failed:"))
 			}
 		}
