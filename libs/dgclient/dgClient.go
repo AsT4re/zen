@@ -3,7 +3,7 @@ package dgclient
 import (
 	client "github.com/dgraph-io/dgraph/client"
 	errors "github.com/pkg/errors"
-	rec    "astare/zen/libs/latencyrecorder"
+	rec    "astare/zen/libs/datasrecorder"
 	"bytes"
 	"strconv"
 	"context"
@@ -22,7 +22,7 @@ type DGClient struct {
 	grpcConns     []*grpc.ClientConn
 	clientDir string
 	dg        *client.Dgraph
-	lr        *rec.LatencyRecorder
+	dr        *rec.DatasRecorder
 }
 
 type FenceProps struct {
@@ -34,7 +34,7 @@ type FencesRep struct {
 	Root        []*FenceProps `json:"fences"`
 }
 
-func NewDGClient(host []string, nbConns uint, lr *rec.LatencyRecorder) (*DGClient, error) {
+func NewDGClient(host []string, nbConns uint, dr *rec.DatasRecorder) (*DGClient, error) {
 	// Init connection to DGraph
 	lenHosts := len(host)
 	if lenHosts == 0 || nbConns == 0 {
@@ -42,12 +42,14 @@ func NewDGClient(host []string, nbConns uint, lr *rec.LatencyRecorder) (*DGClien
 	}
 
 	dgCl := &DGClient{
-		lr: lr,
+		dr: dr,
 	}
 
-	if lr == nil {
-		dgCl.lr = rec.NewLatencyRecorder(false)
+	if dr == nil {
+		dgCl.dr = rec.NewDatasRecorder(false)
 	}
+
+	dgCl.dr.NewCollection("latencies")
 
 	var err error
 	if dgCl.clientDir, err = ioutil.TempDir("", "client_"); err != nil {
@@ -207,13 +209,14 @@ func sendRequest(dgCl *DGClient, reqStr *string, reqMap *map[string]string, rep 
 	req.SetQueryWithVariables(*reqStr, *reqMap)
 
 
-	before := dgCl.lr.Now()
+	before := dgCl.dr.Now()
 	resp, err := dgCl.dg.Run(context.Background(), &req)
-	elapsed := dgCl.lr.SinceTime(before)
+	elapsed := dgCl.dr.SinceTime(before)
 	if err != nil {
 		return errors.Wrap(err, "error when executing request")
 	}
-	dgCl.lr.AddLatency(elapsed)
+
+	dgCl.dr.AddToCollection("latencies", elapsed.Seconds()*1000)
 
 	if len(resp.N[0].Children) == 0 {
 		return nil

@@ -4,7 +4,7 @@ import(
 	sarama   "github.com/Shopify/sarama"
 	cluster  "github.com/bsm/sarama-cluster"
 	errors   "github.com/pkg/errors"
-	rec      "astare/zen/libs/latencyrecorder"
+	rec      "astare/zen/libs/datasrecorder"
 	"os"
 	"os/signal"
 	"log"
@@ -27,7 +27,7 @@ type ProducingMessageConsumer struct {
 	timersMux  sync.Mutex
 	cond       *sync.Cond
 	msgs       int
-	lr         *rec.LatencyRecorder
+	dr         *rec.DatasRecorder
 }
 
 type inputMetadatas struct {
@@ -59,7 +59,7 @@ func NewProducingMessageConsumer(brokers     []string,
 	                               prodTopic   string,
 	                               msgHand     MessageHandler,
 	                               maxRetry    uint32,
-                                 lr          *rec.LatencyRecorder) (*ProducingMessageConsumer, error) {
+                                 dr          *rec.DatasRecorder) (*ProducingMessageConsumer, error) {
 	if int(maxRetry) >  lenLatencies {
 		return nil, errors.Errorf("max retries must be <= %d", lenLatencies)
 	}
@@ -77,14 +77,15 @@ func NewProducingMessageConsumer(brokers     []string,
 		msgHand: msgHand,
 		timers: make(map[string]map[int32]map[int64]*time.Timer),
 		cond: sync.NewCond(&sync.Mutex{}),
-		lr: lr,
+		dr: dr,
 	}
 
-	if lr == nil {
-		pmc.lr = rec.NewLatencyRecorder(false)
+	if dr == nil {
+		pmc.dr = rec.NewDatasRecorder(false)
 	}
 
-	pmc.lr.SetCollectionSpecs("Fences found:", "")
+	pmc.dr.NewCollection("fences")
+	pmc.dr.NewCollection("latencies")
 
 	var err error
 	topics := append(getRetryTopicNames(consTopic), consTopic)
@@ -128,14 +129,14 @@ ConsumerLoop:
 				pmc.cond.L.Unlock()
 			}
 			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
-			before := pmc.lr.Now()
+			before := pmc.dr.Now()
 			handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
 			if err != nil {
 				log.Printf("Publishing in dead letter: unable to Unmarshal message: %v\n", err)
 				pmc.publishDeadLetter(msg)
 				continue ConsumerLoop
 			}
-			elapsed := pmc.lr.SinceTime(before)
+			elapsed := pmc.dr.SinceTime(before)
 
 			if handMsg.Metas != nil {
 				var sched time.Time
@@ -200,8 +201,6 @@ func (pmc *ProducingMessageConsumer) Close() {
 	if err := pmc.consumer.Close(); err != nil {
 		log.Println(err)
 	}
-
-	pmc.inAcksHand.printNbMarkedOffsets()
 }
 
 func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessage) {
@@ -235,7 +234,7 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 		Partition: msg.Partition,
 		Topic: msg.Topic,
 	}
-	before := pmc.lr.Now()
+	before := pmc.dr.Now()
 	outputs, err := pmc.msgHand.Process(handMsg.Value)
 	if err != nil {
 		log.Printf("WARNING: Processing message failed: %v\n", err)
@@ -280,7 +279,7 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 	} else {
 		// Produce outputs
 		nbOutputs := len(outputs)
-		pmc.lr.AddToCollection(float64(nbOutputs))
+		pmc.dr.AddToCollection("fences", float64(nbOutputs))
 		//log.Printf("NbFences = %d (Input:'%s'p:'%d'o:'%d')\n", nbOutputs, msg.Topic, msg.Partition, msg.Offset)
 		if nbOutputs == 0 {
 			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
@@ -295,7 +294,9 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 				Metadata: prodMetas,
 			}
 		}
-		pmc.lr.AddLatency(pmc.lr.SinceTime(before) + elapsed)
+
+		lat := pmc.dr.SinceTime(before) + elapsed
+		pmc.dr.AddToCollection("latencies", lat.Seconds()*1000)
 	}
 }
 

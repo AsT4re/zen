@@ -3,47 +3,26 @@ package main
 import(
 	pmc      "astare/zen/libs/producingmessageconsumer"
 	ulh      "astare/zen/libs/userlocationhandler"
-	rec      "astare/zen/libs/latencyrecorder"
+	rec      "astare/zen/libs/datasrecorder"
 	dbinit   "astare/zen/libs/dbinit"
 	dgclient "astare/zen/libs/dgclient"
 	lp       "astare/zen/libs/locationsproducer"
+	sfd      "astare/zen/libs/statsfiledatas"
+	arrfl    "astare/zen/libs/arrstrflags"
 	errors   "github.com/pkg/errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"bytes"
 	"time"
 )
-
-type arrStrFlags []string
-
-func (i *arrStrFlags) String() string {
-	var buffer bytes.Buffer
-
-	first := true
-	for _, s := range *i {
-		if first == false {
-			buffer.WriteString(",")
-		} else {
-			first = false
-		}
-		buffer.WriteString(s)
-	}
-
-	return buffer.String()
-}
-
-func (i *arrStrFlags) Set(value string) error {
-    *i = append(*i, value)
-    return nil
-}
 
 var (
 	topicUserLoc = flag.String("topic-user-loc", "", "Topic where to consume UserLocation messages")
 	topicUserFence = flag.String("topic-user-fence", "", "Topic where to produce UserFence messages")
-	dgHost arrStrFlags
+	dgHost arrfl.ArrStrFlags
 	dgNbConns = flag.Uint("dg-conns-pool", 1000, "Number of connections to DGraph")
+	statsFile = flag.String("stats-file", "no-name", "Title for the test (output file name)")
 )
 
 func main() {
@@ -69,8 +48,8 @@ func run() error {
 	}
 
 	// Initialize dgClient with latency analyzer
-	dgLr := rec.NewLatencyRecorder(true)
-	dgCl, err := dgclient.NewDGClient(dgHost, *dgNbConns, dgLr)
+	dgDr := rec.NewDatasRecorder(true)
+	dgCl, err := dgclient.NewDGClient(dgHost, *dgNbConns, dgDr)
 	if err != nil {
 		return err
 	}
@@ -82,7 +61,7 @@ func run() error {
 	// Number of messages to process for each call to Consume()
 	nbtotal := 100000
 	// Initialize producing message consumer with latency analyzer
-	msgLr := rec.NewLatencyRecorder(true)
+	msgDr := rec.NewDatasRecorder(true)
 	producingMsgCons, err := pmc.NewProducingMessageConsumer([]string{"localhost:9092"},
 		                                                       "user-loc",
 		                                                       *topicUserLoc,
@@ -91,64 +70,100 @@ func run() error {
 																														 DgCl: dgCl,
 																													 },
 		                                                       uint32(0),
-		                                                       msgLr)
+		                                                       msgDr)
 
 	defer producingMsgCons.Close()
 
-	f, err := os.OpenFile("analysis", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return errors.Wrap(err, "Fail to open file")
-	}
-	defer f.Close()
-
 	batchConf := dbinit.DefaultConfig()
-	nbFencesArr := []int{100000, 100000}
 	fenDiv := 10000
-	var nbFencesAcc int
-	msgsLimit := []int{50, 100}
-	rndLocsSeed := int64(1)
 
-	for i, nbFences := range nbFencesArr {
+	rndLocsSeed := int64(0)
+
+	fDatas := sfd.NewStatsFilesDatas()
+	fDatas.Vars["nb-fences"] = []float64{100000, 100000, 300000, 500000, 1000000}
+	fDatas.Vars["parallel-conns"] = []float64{1, 2, 5, 10, 15, 20, 25, 35, 50, 75, 100, 125, 150, 175, 200, 250, 300, 400, 500}
+	statsNames := []string{
+		"throughput",
+		"dg-lat-mean",
+		"dg-lat-perc95",
+		"msg-lat-mean",
+		"msg-lat-perc95",
+		"fences-mean",
+		"fences-perc95",
+	}
+
+	if err := fDatas.InitStats(statsNames); err != nil {
+		return err
+	}
+
+	nbFencesAcc := 0
+	j := 0
+	nbFencesArr := fDatas.Vars["nb-fences"]
+	for i, nbFenTmp := range nbFencesArr {
+		nbFen := int(nbFenTmp)
 		batchConf.Seed++
-		nbFencesAcc += nbFences
-		log.Printf("Adding %d random fences in dgraph...\n", nbFences)
+		nbFencesAcc += nbFen
+		log.Printf("Adding %d random fences in dgraph...\n", nbFen)
 		if i != 0 {
 			if err := dgCl.ResetClient(); err != nil {
 				return err
 			}
 		}
-		if err := dbinit.AddRandomFences(dgCl, nbFences, batchConf); err != nil {
-			fmt.Printf("HERE ERROR: %v\n", err)
+		if err := dbinit.AddRandomFences(dgCl, nbFen, batchConf); err != nil {
 			return err
 		}
 
-		timeToWait := nbFences/fenDiv + 5
+		timeToWait := nbFen/fenDiv + 60
 		log.Printf("Fences added with success. Waiting %d seconds for data to be replicated...\n", timeToWait)
-		time.Sleep(time.Duration(nbFences/fenDiv + 5) * time.Second)
+		time.Sleep(time.Duration(timeToWait) * time.Second)
 
-		for _, limit := range msgsLimit {
+		parallelConns := fDatas.Vars["parallel-conns"]
+		for _, paralTmp := range parallelConns {
+			paral := int(paralTmp)
 			log.Printf("Adding %d random location messages on %s topic...\n", nbtotal, *topicUserLoc)
+			rndLocsSeed++
 			if err := lp.ProduceRandomLocations(*topicUserLoc, nbtotal, rndLocsSeed); err != nil {
 				return err
 			}
 
+			log.Printf("Consuming and processing %d messages with a limit of %d parallel messages...\n", nbtotal, paral)
 			before := time.Now()
-			producingMsgCons.Consume(nbtotal, limit)
+			producingMsgCons.Consume(nbtotal, paral)
 			producingMsgCons.WaitProcessingMessages()
 			dur := time.Since(before)
 
-			throughput := float64(nbtotal) / dur.Seconds()
-			f.WriteString(fmt.Sprintf("Stats (NbFences: %d. Parallel connections: %d):\n\n", nbFencesAcc, limit))
-			f.WriteString(fmt.Sprintf("Throughput: %f/sec\n\n", throughput))
-			dgLr.DumpFullAnalysis(f, "\nDgraph requests:\n")
-			msgLr.DumpFullAnalysis(f, "\nConsumed messages:\n")
-			f.WriteString("\n")
+			fDatas.Stats["throughput"][j] = float64(nbtotal) / dur.Seconds()
 
-			dgLr.Reset()
-			msgLr.Reset()
+			if err := addStats(dgDr, "latencies", fDatas.Stats["dg-lat-mean"], fDatas.Stats["dg-lat-perc95"], j); err != nil {
+				return err
+			}
+
+			if err := addStats(msgDr, "latencies", fDatas.Stats["msg-lat-mean"], fDatas.Stats["msg-lat-perc95"], j); err != nil {
+				return err
+			}
+			if err := addStats(msgDr, "fences", fDatas.Stats["fences-mean"], fDatas.Stats["fences-perc95"], j); err != nil {
+				return err
+			}
+
+			j++
+
+			dgDr.Reset()
+			msgDr.Reset()
 		}
 	}
+
+	fDatas.Serialize(*statsFile)
 
 	return nil
 }
 
+func addStats(dr *rec.DatasRecorder, name string, slMeans []float64, slPerc95s []float64, j int) error {
+	stats, err := dr.GetStats(name)
+	if err != nil {
+		return err
+	}
+
+	slMeans[j] = stats.Mean
+	slPerc95s[j] = stats.Perc95
+	return nil
+}

@@ -2,19 +2,16 @@
 
 # Problematics #
 
-Evaluate DGraph for Geo fencing.
+Evaluation of DGraph for Geo fencing.
 
-Given a Kafka topic on which user id + location pairs are published, publish
-back on another topic a serie of `fence` messages including the user id and
-the name of the fence the user is in.
+Given a Kafka topic on which user id + location pairs are published, we want
+to match fences in DB that contain this location and then publish these fences
+on another topic.
 
-The messages must be defined using protobuf, code in Go.
+This solution uses go as language, protobuf for message definition and Kafka as
+message broker. We want to analyze throughput for this specific problem using DGraph
+as a database for storing geo index of polygons.
 
-The current solution we use at Zenly is custom made and can hold up to several
-thousand pair per seconds. We want to know whether DGraph could be used to
-replace our custom solution, how we can scale it and how much it costs.
-
-https://en.wikipedia.org/wiki/Geo-fence
 https://dgraph.io/
 
 # Requirements #
@@ -42,10 +39,17 @@ https://dgraph.io/
   cd ../objects
   protoc --go_out=. *.proto --proto_path=../producingmessageconsumer --proto_path=.
   ```
-* Evaluate dgraph for geofencing
+* Evaluate Dgraph. Launch the desired dgraph cluster configuration and execute the 'evaldgraph' binary. It will dump a file with statistics.
   ```
   cd ../../evaldgraph
+  go get
   go build
-  ./evaldgraph --topic-user-loc="UserLoc" --topic-user-fence="UserFence" --dg-host-and-port=<ipNodeDgraph>:9080
+  ./evaldgraph --topic-user-loc="UserLoc" --topic-user-fence="UserFence" --dg-host-and-port=<ipNodeDgraph>:9080 --dg-host-and-port=<ipNode2Dgraph>:9080 --stats-file=dg-2-nodes
   ```
-* Open "analysis" file
+* Generate graphs based on statistics files
+  ```
+  cd ../generategraphs
+  go get
+  go build
+  ./generategraphs --input=../evaldgraph/dg-1-node --input=../evaldgraph/dg-2-nodes
+  ```
