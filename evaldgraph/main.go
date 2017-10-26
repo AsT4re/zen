@@ -69,7 +69,7 @@ func run() error {
 		                                                       &ulh.UserLocationHandler {
 																														 DgCl: dgCl,
 																													 },
-		                                                       uint32(0),
+		                                                       0,
 		                                                       msgDr)
 
 	defer producingMsgCons.Close()

@@ -8,13 +8,12 @@ import(
 	"os"
 	"os/signal"
 	"log"
+	"fmt"
 	"sync"
 	"time"
-	"strconv"
 )
 
 type ProducingMessageConsumer struct {
-	maxRetry   uint32
 	consumer   *cluster.Consumer
 	producer   sarama.AsyncProducer
 	prodTopic  string
@@ -23,11 +22,12 @@ type ProducingMessageConsumer struct {
 	inAcksHand *inputsAcksHandler
 	wgOutAcks  sync.WaitGroup
 	wgMsgHand  sync.WaitGroup
-	timers     map[string]map[int32]map[int64]*time.Timer
-	timersMux  sync.Mutex
 	cond       *sync.Cond
 	msgs       int
 	dr         *rec.DatasRecorder
+	deadLimit  int
+	nbDead     int
+	nbDeadMut  sync.Mutex
 }
 
 type inputMetadatas struct {
@@ -37,32 +37,13 @@ type inputMetadatas struct {
 	NbOutputs int
 }
 
-const lenLatencies = 9
-
-var latencies = [lenLatencies]time.Duration {
-	time.Duration(2)*time.Second,
-	time.Duration(2)*time.Second,
-	time.Duration(10)*time.Second,
-	time.Duration(30)*time.Second,
-	time.Duration(1)*time.Minute,
-	time.Duration(10)*time.Minute,
-	time.Duration(1)*time.Hour,
-	time.Duration(1)*time.Hour,
-	time.Duration(24)*time.Hour,
-}
-
-var topicsByRetry [lenLatencies]string
-
 func NewProducingMessageConsumer(brokers     []string,
 	                               consGroupId string,
 	                               consTopic   string,
 	                               prodTopic   string,
 	                               msgHand     MessageHandler,
-	                               maxRetry    uint32,
+	                               deadLimit   int,
                                  dr          *rec.DatasRecorder) (*ProducingMessageConsumer, error) {
-	if int(maxRetry) >  lenLatencies {
-		return nil, errors.Errorf("max retries must be <= %d", lenLatencies)
-	}
 	config := cluster.NewConfig()
 	// Set config for consumer
 	config.Consumer.Return.Errors = true
@@ -71,11 +52,10 @@ func NewProducingMessageConsumer(brokers     []string,
 	config.Producer.Return.Successes = true
 
 	pmc := &ProducingMessageConsumer {
-		maxRetry: maxRetry,
+		deadLimit: deadLimit,
 		prodTopic: prodTopic,
 		consTopic: consTopic,
 		msgHand: msgHand,
-		timers: make(map[string]map[int32]map[int64]*time.Timer),
 		cond: sync.NewCond(&sync.Mutex{}),
 		dr: dr,
 	}
@@ -88,9 +68,8 @@ func NewProducingMessageConsumer(brokers     []string,
 	pmc.dr.NewCollection("latencies")
 
 	var err error
-	topics := append(getRetryTopicNames(consTopic), consTopic)
 	// Create cluster of consumer for handling messages
-	pmc.consumer, err = cluster.NewConsumer(brokers, consGroupId, topics, config)
+	pmc.consumer, err = cluster.NewConsumer(brokers, consGroupId, []string{consTopic}, config)
 	if err != nil {
 		return nil, errors.Wrap(err, "Create cluster of consumers failed")
 	}
@@ -132,36 +111,12 @@ ConsumerLoop:
 			before := pmc.dr.Now()
 			handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
 			if err != nil {
-				log.Printf("Publishing in dead letter: unable to Unmarshal message: %v\n", err)
-				pmc.publishDeadLetter(msg)
-				continue ConsumerLoop
+				log.Panicf("Error when unmarshalling message: %v", err)
 			}
 			elapsed := pmc.dr.SinceTime(before)
 
-			if handMsg.Metas != nil {
-				var sched time.Time
-				if err := sched.UnmarshalText(handMsg.Metas.Schedule); err != nil {
-					log.Printf("Publishing in dead letter: unable to Unmarshal date time: %v\n", err)
-					pmc.publishDeadLetter(msg)
-					continue ConsumerLoop
-				}
-				pmc.wgMsgHand.Add(1)
-				f := func(msg *sarama.ConsumerMessage, elapsed time.Duration) func() {
-					return func() {
-						pmc.processMessage(msg, handMsg, elapsed, msgsLimit)
-						pmc.timersMux.Lock()
-						delete(pmc.timers[msg.Topic][msg.Partition], msg.Offset)
-						pmc.timersMux.Unlock()
-					}
-				}
-				pmc.timersMux.Lock()
-				timer := time.AfterFunc(time.Until(sched), f(msg, elapsed))
-				addTimer(pmc.timers, timer, msg.Topic, msg.Partition, msg.Offset)
-				pmc.timersMux.Unlock()
-			} else {
-				pmc.wgMsgHand.Add(1)
-				go pmc.processMessage(msg, handMsg, elapsed, msgsLimit)
-			}
+			pmc.wgMsgHand.Add(1)
+			go pmc.processMessage(msg, handMsg, elapsed, msgsLimit)
     case <-signals:
 			break ConsumerLoop
     }
@@ -175,21 +130,8 @@ ConsumerLoop:
 	}
 }
 
-
 func (pmc *ProducingMessageConsumer) WaitProcessingMessages() {
-	pmc.timersMux.Lock()
-	for _, p := range pmc.timers {
-		for _, o := range p {
-			for _, t := range o {
-				if t.Stop() {
-					pmc.wgMsgHand.Done()
-				}
-			}
-		}
-	}
-	pmc.timersMux.Unlock()
 	pmc.wgMsgHand.Wait()
-
 	pmc.msgs = 0
 }
 
@@ -203,10 +145,21 @@ func (pmc *ProducingMessageConsumer) Close() {
 	}
 }
 
-func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessage) {
+func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessage, messVal interface{}, procErr error) {
+	outEncoded, err := pmc.msgHand.Marshal(&Message{
+		Value: messVal,
+		Metas: &MessageMetadatas{
+			error: fmt.Sprintf("%v", procErr),
+		},
+	})
+
+	if err != nil {
+		log.Panicln(err)
+	}
+
 	pmc.producer.Input() <- &sarama.ProducerMessage{
 		Topic: pmc.consTopic + "-dead",
-		Value: sarama.ByteEncoder(msg.Value),
+		Value: sarama.ByteEncoder(outEncoded),
 		Metadata: &inputMetadatas{
 			Offset: msg.Offset,
 			Partition: msg.Partition,
@@ -236,69 +189,41 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 	}
 	before := pmc.dr.Now()
 	outputs, err := pmc.msgHand.Process(handMsg.Value)
+
 	if err != nil {
-		log.Printf("WARNING: Processing message failed: %v\n", err)
-		if handMsg.Metas != nil {
-			handMsg.Metas.Retry++
-		} else {
-			handMsg.Metas = &MessageMetadatas{
-				MaxRetry: pmc.maxRetry,
-				Retry: 0,
+		if pmc.deadLimit >= 0 {
+			pmc.nbDeadMut.Lock()
+			if pmc.nbDead == pmc.deadLimit {
+				log.Panicf("Limit of dead letter messages reached (Err: %v)\n", err)
 			}
+			pmc.nbDead++
+			pmc.nbDeadMut.Unlock()
 		}
-
-		if handMsg.Metas.Retry == handMsg.Metas.MaxRetry {
-			log.Println("Publishing in dead letter: max retry reached")
-			pmc.publishDeadLetter(msg)
-			return
-		}
-
-		newTi :=  time.Now().Add(latencies[handMsg.Metas.Retry])
-		handMsg.Metas.Schedule, err = newTi.MarshalText()
-		if err != nil {
-			log.Panicln(err)
-		}
-
-		outEncoded, err := pmc.msgHand.Marshal(&Message{
-			Value: handMsg.Value,
-			Metas: handMsg.Metas,
-		})
-
-		if err != nil {
-			log.Panicln(err)
-		}
-
-		retryTopic := topicsByRetry[handMsg.Metas.Retry]
-		log.Printf("Publish on retry queue: %s", retryTopic)
-		prodMetas.NbOutputs = 1
-		pmc.producer.Input() <- &sarama.ProducerMessage{
-			Topic: retryTopic,
-			Value: sarama.ByteEncoder(outEncoded),
-			Metadata: prodMetas,
-		}
+		log.Printf("Processing message failed, publishing in dead-letter queue (Err: %v)\n", err)
+		pmc.publishDeadLetter(msg, handMsg.Value, err)
 	} else {
 		// Produce outputs
 		nbOutputs := len(outputs)
 		pmc.dr.AddToCollection("fences", float64(nbOutputs))
-		//log.Printf("NbFences = %d (Input:'%s'p:'%d'o:'%d')\n", nbOutputs, msg.Topic, msg.Partition, msg.Offset)
+
 		if nbOutputs == 0 {
 			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
-			return
-		}
-		prodMetas.NbOutputs = nbOutputs
-
-		for _, out := range outputs {
-			pmc.producer.Input() <- &sarama.ProducerMessage{
-				Topic: pmc.prodTopic,
-				Value: sarama.ByteEncoder(out),
-				Metadata: prodMetas,
+		} else {
+			prodMetas.NbOutputs = nbOutputs
+			for _, out := range outputs {
+				pmc.producer.Input() <- &sarama.ProducerMessage{
+					Topic: pmc.prodTopic,
+					Value: sarama.ByteEncoder(out),
+					Metadata: prodMetas,
+				}
 			}
 		}
-
-		lat := pmc.dr.SinceTime(before) + elapsed
-		pmc.dr.AddToCollection("latencies", lat.Seconds()*1000)
 	}
+
+	lat := pmc.dr.SinceTime(before) + elapsed
+	pmc.dr.AddToCollection("latencies", lat.Seconds()*1000)
 }
+
 
 func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
 	defer pmc.wgOutAcks.Done()
@@ -356,47 +281,4 @@ func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
 			break
 		}
 	}
-}
-
-// Helpers
-
-func addTimer(t map[string]map[int32]map[int64]*time.Timer, timer *time.Timer, topic string, part int32, off int64) {
-	p, ok := t[topic]
-	if !ok {
-		p = make(map[int32]map[int64]*time.Timer)
-		t[topic] = p
-	}
-
-	var o map[int64]*time.Timer
-	o, ok = p[part]
-	if !ok {
-		o = make(map[int64]*time.Timer)
-		p[part] = o
-	}
-	o[off] = timer
-}
-
-func getRetryTopicNames(topName string) []string {
-	var topics []string
-
-	m := make(map[time.Duration][]int)
-	for i, lat := range latencies {
-		m[lat] = append(m[lat], i)
-	}
-
-	for key, val := range m {
-		var valStr string
-		if key < time.Second {
-			valStr = strconv.FormatFloat(float64(key) / float64(time.Second), 'f', -1, 64)
-		} else {
-			valStr = strconv.FormatInt(int64(key / time.Second), 10)
-		}
-		name := topName + "-" + valStr
-		topics = append(topics, name)
-		for _, ind := range val {
-			topicsByRetry[ind] = name
-		}
-	}
-
-	return topics
 }

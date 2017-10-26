@@ -4,7 +4,5 @@ package pmc;
 option go_package = "astare/zen/libs/producingmessageconsumer;pmc";
 
 message MessageMetadatas {
-  bytes schedule = 1;
-  uint32 maxRetry = 2;
-  uint32 retry = 3;
+  string error = 1;
 }
