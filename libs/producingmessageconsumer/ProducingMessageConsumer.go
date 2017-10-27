@@ -10,7 +10,6 @@ import(
 	"log"
 	"fmt"
 	"sync"
-	"time"
 )
 
 type ProducingMessageConsumer struct {
@@ -19,11 +18,7 @@ type ProducingMessageConsumer struct {
 	prodTopic  string
 	consTopic  string
 	msgHand    MessageHandler
-	inAcksHand *inputsAcksHandler
 	wgOutAcks  sync.WaitGroup
-	wgMsgHand  sync.WaitGroup
-	cond       *sync.Cond
-	msgs       int
 	dr         *rec.DatasRecorder
 	deadLimit  int
 	nbDead     int
@@ -45,6 +40,7 @@ func NewProducingMessageConsumer(brokers     []string,
 	                               deadLimit   int,
                                  dr          *rec.DatasRecorder) (*ProducingMessageConsumer, error) {
 	config := cluster.NewConfig()
+	config.Group.Mode = cluster.ConsumerModePartitions
 	// Set config for consumer
 	config.Consumer.Return.Errors = true
 	config.Consumer.Offsets.Initial = sarama.OffsetOldest
@@ -56,7 +52,6 @@ func NewProducingMessageConsumer(brokers     []string,
 		prodTopic: prodTopic,
 		consTopic: consTopic,
 		msgHand: msgHand,
-		cond: sync.NewCond(&sync.Mutex{}),
 		dr: dr,
 	}
 
@@ -83,60 +78,81 @@ func NewProducingMessageConsumer(brokers     []string,
     return nil, errors.Wrap(err, "Create producer failed")
 	}
 
-	pmc.inAcksHand = newInputsAcksHandler(pmc.consumer)
-
 	pmc.wgOutAcks.Add(1)
 	go pmc.handleOutputsAcks()
 
 	return pmc, nil
 }
 
-func (pmc *ProducingMessageConsumer) Consume(nbtotal int, msgsLimit int) {
-	var procmsgs int
+func (pmc *ProducingMessageConsumer) ConsumeLtd(limits map[string]map[int32]uint, total int) error {
+	var wg sync.WaitGroup
+	totalCount := 0
+PartLoop:
+	for {
+		select {
+		case part, ok := <-pmc.consumer.Partitions():
+			if !ok {
+				return errors.New("Channel has been closed prematurely")
+			}
+
+			p, ok := limits[part.Topic()]
+			if ok {
+				l, ok := p[part.Partition()]
+				if ok {
+					delete(p, part.Partition())
+					if len(p) == 0 {
+						delete(limits, part.Topic())
+					}
+					wg.Add(1)
+					go func(pc cluster.PartitionConsumer, limit uint) {
+						defer wg.Done()
+						count := uint(0)
+						for msg := range pc.Messages() {
+							pmc.consumeMessage(msg)
+							count++
+							if count == limit {
+								break
+							}
+						}
+					}(part, l)
+				}
+			}
+
+			totalCount++
+			if  totalCount == total {
+				break PartLoop
+			}
+		}
+	}
+
+	wg.Wait()
+
+	return nil
+}
+
+func (pmc *ProducingMessageConsumer) Consume() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt)
-ConsumerLoop:
+PartLoop:
 	for {
-    select {
-    case msg := <-pmc.consumer.Messages():
-			if msgsLimit > 0 {
-				pmc.cond.L.Lock()
-				if pmc.msgs == msgsLimit {
-					pmc.cond.Wait()
+		select {
+		case part, ok := <-pmc.consumer.Partitions():
+			if !ok {
+				return
+			}
+			go func(pc cluster.PartitionConsumer) {
+				for msg := range pc.Messages() {
+					pmc.consumeMessage(msg)
 				}
-				pmc.msgs++
-				pmc.cond.L.Unlock()
-			}
-			pmc.inAcksHand.firstOffsetInit(msg.Topic, msg.Partition, msg.Offset)
-			before := pmc.dr.Now()
-			handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
-			if err != nil {
-				log.Panicf("Error when unmarshalling message: %v", err)
-			}
-			elapsed := pmc.dr.SinceTime(before)
-
-			pmc.wgMsgHand.Add(1)
-			go pmc.processMessage(msg, handMsg, elapsed, msgsLimit)
-    case <-signals:
-			break ConsumerLoop
-    }
-
-		if nbtotal > 0 {
-			procmsgs++
-			if procmsgs == nbtotal {
-				break ConsumerLoop
-			}
+			}(part)
+		case <-signals:
+			break PartLoop
 		}
 	}
 }
 
-func (pmc *ProducingMessageConsumer) WaitProcessingMessages() {
-	pmc.wgMsgHand.Wait()
-	pmc.msgs = 0
-}
 
 func (pmc *ProducingMessageConsumer) Close() {
-	pmc.WaitProcessingMessages()
 	pmc.producer.AsyncClose()
 	pmc.wgOutAcks.Wait()
 
@@ -149,7 +165,7 @@ func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessa
 	outEncoded, err := pmc.msgHand.Marshal(&Message{
 		Value: messVal,
 		Metas: &MessageMetadatas{
-			error: fmt.Sprintf("%v", procErr),
+			Error: fmt.Sprintf("%v", procErr),
 		},
 	})
 
@@ -169,25 +185,20 @@ func (pmc *ProducingMessageConsumer) publishDeadLetter(msg *sarama.ConsumerMessa
 	}
 }
 
-func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
-	                                                  handMsg *Message,
-	                                                  elapsed time.Duration,
-                                                    msgsLimit int) {
-	defer func() {
-		if msgsLimit > 0 {
-			pmc.cond.L.Lock()
-			pmc.msgs--
-			pmc.cond.Signal()
-			pmc.cond.L.Unlock()
-		}
-		pmc.wgMsgHand.Done()
-	}()
+func (pmc *ProducingMessageConsumer) consumeMessage(msg *sarama.ConsumerMessage) {
+
+	before := pmc.dr.Now()
+
+	handMsg, err := pmc.msgHand.Unmarshal(msg.Value)
+	if err != nil {
+		log.Panicf("Error when unmarshalling message: %v", err)
+	}
+
 	prodMetas := &inputMetadatas{
 		Offset: msg.Offset,
 		Partition: msg.Partition,
 		Topic: msg.Topic,
 	}
-	before := pmc.dr.Now()
 	outputs, err := pmc.msgHand.Process(handMsg.Value)
 
 	if err != nil {
@@ -207,7 +218,7 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 		pmc.dr.AddToCollection("fences", float64(nbOutputs))
 
 		if nbOutputs == 0 {
-			pmc.inAcksHand.ack(msg.Topic, msg.Partition, msg.Offset)
+			pmc.consumer.MarkOffset(msg, "")
 		} else {
 			prodMetas.NbOutputs = nbOutputs
 			for _, out := range outputs {
@@ -220,7 +231,7 @@ func (pmc *ProducingMessageConsumer) processMessage(msg *sarama.ConsumerMessage,
 		}
 	}
 
-	lat := pmc.dr.SinceTime(before) + elapsed
+	lat := pmc.dr.SinceTime(before)
 	pmc.dr.AddToCollection("latencies", lat.Seconds()*1000)
 }
 
@@ -260,7 +271,7 @@ func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
 			}
 
 			if v == 1 {
-				pmc.inAcksHand.ack(inMetas.Topic, inMetas.Partition, inMetas.Offset)
+				pmc.consumer.MarkPartitionOffset(inMetas.Topic, inMetas.Partition, inMetas.Offset, "")
 				delete(o, inMetas.Offset)
 			} else {
 				o[inMetas.Offset] = v - 1
@@ -270,9 +281,6 @@ func (pmc *ProducingMessageConsumer) handleOutputsAcks() {
 				errChan = nil
 				break
 			}
-			// On sarama producer side, retries have been made, so there is a
-			// a good chance that the issue comes from kafka and in that case
-			// it's better to stop the program in order to avoid other errors
 			log.Panicf("Publishing message (t: %s, p: %d, o: %d) error: %v\n",
 				          err.Msg.Topic, err.Msg.Partition, err.Msg.Offset, err)
 		}

@@ -58,21 +58,12 @@ func run() error {
 	}
 	defer dgCl.Close()
 
+	msgHand := &ulh.UserLocationHandler {
+		DgCl: dgCl,
+	}
+
 	// Number of messages to process for each call to Consume()
 	nbtotal := 100000
-	// Initialize producing message consumer with latency analyzer
-	msgDr := rec.NewDatasRecorder(true)
-	producingMsgCons, err := pmc.NewProducingMessageConsumer([]string{"localhost:9092"},
-		                                                       "user-loc",
-		                                                       *topicUserLoc,
-		                                                       *topicUserFence,
-		                                                       &ulh.UserLocationHandler {
-																														 DgCl: dgCl,
-																													 },
-		                                                       0,
-		                                                       msgDr)
-
-	defer producingMsgCons.Close()
 
 	batchConf := dbinit.DefaultConfig()
 	fenDiv := 10000
@@ -119,18 +110,31 @@ func run() error {
 
 		parallelConns := fDatas.Vars["parallel-conns"]
 		for _, paralTmp := range parallelConns {
-			paral := int(paralTmp)
+			paral := int32(paralTmp)
 			log.Printf("Adding %d random location messages on %s topic...\n", nbtotal, *topicUserLoc)
 			rndLocsSeed++
-			if err := lp.ProduceRandomLocations(*topicUserLoc, nbtotal, rndLocsSeed); err != nil {
+			summary, err := lp.ProduceRandomLocations(*topicUserLoc, nbtotal, rndLocsSeed, paral)
+			if err != nil {
 				return err
 			}
 
+				// Initialize producing message consumer with latency analyzer
+			msgDr := rec.NewDatasRecorder(true)
+			producingMsgCons, err := pmc.NewProducingMessageConsumer([]string{"localhost:9092"},
+				                                                       "user-loc",
+		                                                           *topicUserLoc,
+		                                                           *topicUserFence,
+				                                                       msgHand,
+		                                                           0,
+		                                                           msgDr)
+
 			log.Printf("Consuming and processing %d messages with a limit of %d parallel messages...\n", nbtotal, paral)
 			before := time.Now()
-			producingMsgCons.Consume(nbtotal, paral)
-			producingMsgCons.WaitProcessingMessages()
+			limits := make(map[string]map[int32]uint)
+			limits[*topicUserLoc] = summary
+			producingMsgCons.ConsumeLtd(limits, 1000)
 			dur := time.Since(before)
+			producingMsgCons.Close()
 
 			fDatas.Stats["throughput"][j] = float64(nbtotal) / dur.Seconds()
 
@@ -148,7 +152,6 @@ func run() error {
 			j++
 
 			dgDr.Reset()
-			msgDr.Reset()
 		}
 	}
 

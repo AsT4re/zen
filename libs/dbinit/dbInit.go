@@ -10,6 +10,7 @@ import (
 	"os"
 	"math/rand"
 	"time"
+	"log"
 )
 
 type geometry struct {
@@ -127,6 +128,10 @@ func AddRandomFences(dgCl *dgclient.DGClient, nbFences int, config *AddFencesCon
 		now := time.Now()
 		if err := dgCl.AddNewNodeToBatch(randomdata.SillyName(), locStr, now); err != nil {
 			return err
+		}
+
+		if i != 0 && i % 10000 == 0 {
+			log.Printf("%d fences added\n", i)
 		}
 	}
 
