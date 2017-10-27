@@ -1,8 +1,8 @@
 package locationsproducer
 
 import(
-	"astare/zen/libs/objects"
-	"astare/zen/libs/randcoords"
+	"github.com/AsT4re/zen/libs/objects"
+	"github.com/AsT4re/zen/libs/randcoords"
 	"github.com/golang/protobuf/proto"
 	srma   "github.com/Shopify/sarama"
 	"github.com/pkg/errors"

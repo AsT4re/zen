@@ -1,8 +1,8 @@
 package dbinit
 
 import (
-	"astare/zen/libs/dgclient"
-	"astare/zen/libs/randcoords"
+	"github.com/AsT4re/zen/libs/dgclient"
+	"github.com/AsT4re/zen/libs/randcoords"
 	"bytes"
 	"github.com/pkg/errors"
 	randomdata "github.com/Pallinder/go-randomdata"

@@ -3,7 +3,7 @@ package dgclient
 import (
 	client "github.com/dgraph-io/dgraph/client"
 	errors "github.com/pkg/errors"
-	rec    "astare/zen/libs/datasrecorder"
+	rec    "github.com/AsT4re/zen/libs/datasrecorder"
 	"bytes"
 	"strconv"
 	"context"

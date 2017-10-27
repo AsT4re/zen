@@ -1,9 +1,9 @@
 package userlocationhandler
 
 import (
-	objects  "astare/zen/libs/objects"
-	pmc      "astare/zen/libs/producingmessageconsumer"
-	dgclient "astare/zen/libs/dgclient"
+	objects  "github.com/AsT4re/zen/libs/objects"
+	pmc      "github.com/AsT4re/zen/libs/producingmessageconsumer"
+	dgclient "github.com/AsT4re/zen/libs/dgclient"
 	proto    "github.com/golang/protobuf/proto"
 	errors   "github.com/pkg/errors"
 )

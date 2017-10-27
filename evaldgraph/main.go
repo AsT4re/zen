@@ -1,14 +1,14 @@
 package main
 
 import(
-	pmc      "astare/zen/libs/producingmessageconsumer"
-	ulh      "astare/zen/libs/userlocationhandler"
-	rec      "astare/zen/libs/datasrecorder"
-	dbinit   "astare/zen/libs/dbinit"
-	dgclient "astare/zen/libs/dgclient"
-	lp       "astare/zen/libs/locationsproducer"
-	sfd      "astare/zen/libs/statsfiledatas"
-	arrfl    "astare/zen/libs/arrstrflags"
+	pmc      "github.com/AsT4re/zen/libs/producingmessageconsumer"
+	ulh      "github.com/AsT4re/zen/libs/userlocationhandler"
+	rec      "github.com/AsT4re/zen/libs/datasrecorder"
+	dbinit   "github.com/AsT4re/zen/libs/dbinit"
+	dgclient "github.com/AsT4re/zen/libs/dgclient"
+	lp       "github.com/AsT4re/zen/libs/locationsproducer"
+	sfd      "github.com/AsT4re/zen/libs/statsfiledatas"
+	arrfl    "github.com/AsT4re/zen/libs/arrstrflags"
 	errors   "github.com/pkg/errors"
 	"flag"
 	"fmt"

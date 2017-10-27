@@ -4,7 +4,7 @@ import(
 	sarama   "github.com/Shopify/sarama"
 	cluster  "github.com/bsm/sarama-cluster"
 	errors   "github.com/pkg/errors"
-	rec      "astare/zen/libs/datasrecorder"
+	rec      "github.com/AsT4re/zen/libs/datasrecorder"
 	"os"
 	"os/signal"
 	"log"

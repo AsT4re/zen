@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 package pmc;
-option go_package = "astare/zen/libs/producingmessageconsumer;pmc";
+option go_package = "github.com/AsT4re/zen/libs/producingmessageconsumer;pmc";
 
 message MessageMetadatas {
   string error = 1;

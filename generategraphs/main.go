@@ -1,8 +1,8 @@
 package main
 
 import(
-	sfd      "astare/zen/libs/statsfiledatas"
-	arrfl    "astare/zen/libs/arrstrflags"
+	sfd      "github.com/AsT4re/zen/libs/statsfiledatas"
+	arrfl    "github.com/AsT4re/zen/libs/arrstrflags"
 	chart    "github.com/wcharczuk/go-chart"
 	errors   "github.com/pkg/errors"
 	"fmt"
