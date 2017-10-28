@@ -1,5 +1,0 @@
-{
-  geofences(func:contains(loc, [33.51478,-111.93978])) {
-    name
-  }
-}
